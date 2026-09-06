@@ -8,6 +8,49 @@ from utils.exceptions import TranslationError, ValidationError
 from utils.logging import log_message
 
 
+def _extract_deepseek_output_text(result: dict[str, Any]) -> str | None:
+    """Pull assistant text from a DeepSeek Responses API body.
+
+    Successful responses still include ``"error": null``. ``dict.get("error", {})``
+    therefore returns ``None``, and chaining ``.get("message")`` raises.
+    The convenience ``output_text`` field is also often omitted; text then
+    lives under ``output[].content[].text``.
+    """
+    error_obj = result.get("error")
+    if error_obj:
+        if isinstance(error_obj, dict):
+            error_msg = error_obj.get("message", "Unknown error")
+        else:
+            error_msg = str(error_obj)
+        raise TranslationError(f"DeepSeek API returned error: {error_msg}")
+
+    output_text = result.get("output_text")
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    output_items = result.get("output")
+    if isinstance(output_items, list):
+        texts: list[str] = []
+        for item in output_items:
+            if not isinstance(item, dict) or item.get("type") == "reasoning":
+                continue
+            content_blocks = item.get("content")
+            if not isinstance(content_blocks, list):
+                continue
+            for block in content_blocks:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "reasoning_text":
+                    continue
+                text_val = block.get("text") or block.get("output_text")
+                if isinstance(text_val, str) and text_val.strip():
+                    texts.append(text_val.strip())
+        if texts:
+            return "\n".join(texts)
+
+    return None
+
+
 def call_deepseek_endpoint(
     api_key: str,
     model_name: str,
@@ -148,16 +191,15 @@ def call_deepseek_endpoint(
             log_message("Processing DeepSeek response", verbose=debug)
             try:
                 result = response.json()
+                output_text = _extract_deepseek_output_text(result)
+                if output_text:
+                    return output_text
 
-                if "error" in result:
-                    error_msg = result.get("error", {}).get("message", "Unknown error")
-                    raise TranslationError(f"DeepSeek API returned error: {error_msg}")
-
-                output_text = result.get("output_text")
-                if isinstance(output_text, str) and output_text.strip():
-                    return output_text.strip()
-
-                finish_reason = result.get("finish_reason") or "unknown"
+                finish_reason = (
+                    result.get("status")
+                    or result.get("finish_reason")
+                    or "unknown"
+                )
                 log_message(
                     f"No text content in DeepSeek response. Finish reason: {finish_reason}",
                     always_print=True,
@@ -168,7 +210,13 @@ def call_deepseek_endpoint(
                 )
                 return None
 
-            except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+            except (
+                json.JSONDecodeError,
+                KeyError,
+                IndexError,
+                TypeError,
+                AttributeError,
+            ) as e:
                 raise TranslationError(
                     f"Error processing successful DeepSeek API response: {e!s}"
                 ) from e
