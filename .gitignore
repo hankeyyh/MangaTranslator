@@ -3,6 +3,8 @@ __pycache__/
 *.pyo
 *.pyd
 *.egg-info/
+.env
+.python-version
 /build/
 /dist/
 /venv/
@@ -31,3 +33,5 @@ Thumbs.db
 /.vscode/
 *.log
 *.txt
+output/
+testcase

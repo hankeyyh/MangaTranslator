@@ -19,6 +19,36 @@ from utils.model_metadata import (
 )
 
 
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from .env without overriding existing environment variables."""
+    candidates = (
+        Path(__file__).resolve().parent / ".env",
+        Path.cwd() / ".env",
+    )
+    seen: set[Path] = set()
+    for env_path in candidates:
+        resolved = env_path.resolve()
+        if resolved in seen or not env_path.is_file():
+            continue
+        seen.add(resolved)
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+_load_dotenv()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Translate manga/comic speech bubbles using a configuration approach",

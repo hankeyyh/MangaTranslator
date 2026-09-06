@@ -1277,6 +1277,8 @@ def translate_and_render(
                     for bubble in sorted_bubble_data
                     if "image_b64" in bubble and "mime_type" in bubble
                 ]
+               
+                # Translation
                 translated_texts = []
                 current_ocr_texts: list[str] = []
                 _provider_tag = f"[{config.translation.provider}:"
