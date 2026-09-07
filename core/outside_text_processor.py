@@ -214,6 +214,15 @@ def _apply_inpaint_render_metadata(
         item["needs_text_background"] = needs_text_bg
 
 
+def _lama_mask_dump_dir(output_path: str | Path | None) -> Path:
+    """Put stroke-debug PNGs under the translation output directory."""
+    if output_path is None:
+        return Path("output") / "lama_mask_debug"
+    dest = Path(output_path)
+    base = dest.parent if dest.suffix else dest
+    return base / "lama_mask_debug"
+
+
 def prepare_outside_text_work(
     pil_image: Image.Image,
     config: MangaTranslatorConfig,
@@ -223,6 +232,7 @@ def prepare_outside_text_work(
     bubble_data: list[dict[str, Any]] | None = None,
     text_free_boxes: list[list[float]] | None = None,
     panels: list[tuple[int, int, int, int]] | None = None,
+    output_path: str | Path | None = None,
 ) -> OutsideTextWork | None:
     """Detect outside text and build translation crops without inpainting."""
     if not config.outside_text.enabled:
@@ -585,6 +595,10 @@ def prepare_outside_text_work(
                 verbose=verbose,
             )
 
+        use_dbnet_mask = (
+            config.outside_text.inpainting_method == "lama_large"
+            and bool(getattr(config.outside_text, "lama_use_dbnet_mask", True))
+        )
         mask_groups, _ = outside_detector.get_text_masks(
             str(image_path),
             bbox_expansion_percent_width=config.outside_text.bbox_expansion_percent_width,
@@ -593,7 +607,31 @@ def prepare_outside_text_work(
             verbose=verbose,
             image_override=pil_image,
             existing_results=raw_outside_text_results,
+            stroke_source="dbnet" if use_dbnet_mask else None,
+            stroke_detect_size=int(
+                getattr(config.outside_text, "lama_detect_size", 2048)
+            ),
+            stroke_dilation_offset=int(
+                getattr(config.outside_text, "lama_mask_dilation_offset", 15)
+            ),
+            stroke_kernel_size=int(
+                getattr(config.outside_text, "lama_kernel_size", 3)
+            ),
+            stroke_use_crf=bool(getattr(config.outside_text, "lama_use_crf", True)),
+            stroke_max_dilate=int(
+                getattr(config.outside_text, "lama_mask_max_dilation", 15)
+            ),
+            stroke_dump_dir=(
+                str(_lama_mask_dump_dir(output_path))
+                if bool(getattr(config.outside_text, "lama_dump_masks", False))
+                else None
+            ),
         )
+        if use_dbnet_mask:
+            try:
+                get_model_manager().unload_dbnet(verbose=verbose)
+            except Exception:
+                pass
 
         outside_text_data = _build_outside_text_data(
             pil_image=pil_image,
@@ -711,12 +749,15 @@ def finish_outside_text_work(
 
                 extracted_text_colors = {}
                 flux_inpaints = 0
+                lama_inpaints = 0
                 cv2_inpaints = 0
                 none_skips = 0
                 group_flux_regions = bool(config.outside_text.flux_group_regions)
                 grouped_flux_candidates = []
                 request_coordinator = getattr(config, "request_coordinator", None)
                 pending_flux_candidates = []
+                lama_full_masks = []
+                is_lama_full = inpainting_method == "lama_large" and inpainter is not None
 
                 def apply_candidate_simple_fill(candidate, color_to_use):
                     new_img = current_image.copy()
@@ -1400,6 +1441,14 @@ def finish_outside_text_work(
                         )
                         continue
 
+                    if is_lama_full:
+                        lama_full_masks.append(combined_mask)
+                        log_message(
+                            f"Queued OSB region {i + 1} for full-page LaMa",
+                            verbose=verbose,
+                        )
+                        continue
+
                     if group_flux_regions and inpainter is not None:
                         flush_pending_flux_candidates()
                         grouped_mask = combined_mask.copy()
@@ -1545,6 +1594,62 @@ def finish_outside_text_work(
 
                 flush_pending_flux_candidates()
 
+                if is_lama_full and lama_full_masks:
+                    full_mask = np.logical_or.reduce(lama_full_masks)
+                    if np.any(full_mask):
+                        log_message(
+                            "Running full-page LaMa for "
+                            f"{len(lama_full_masks)} OSB region(s)",
+                            verbose=verbose,
+                        )
+                        try:
+                            inpaint_kwargs = {
+                                "seed": base_seed,
+                                "verbose": verbose,
+                                "ocr_params": {
+                                    "type": "outside_text_lama_full",
+                                    "regions": len(lama_full_masks),
+                                },
+                            }
+                            if request_coordinator is not None:
+                                inpainted_image = request_coordinator.run(
+                                    inpainter.inpaint_full,
+                                    current_image,
+                                    full_mask,
+                                    **inpaint_kwargs,
+                                )
+                            else:
+                                inpainted_image = inpainter.inpaint_full(
+                                    current_image,
+                                    full_mask,
+                                    **inpaint_kwargs,
+                                )
+                            if inpainted_image is current_image:
+                                raise RuntimeError(
+                                    "Inpainter returned original image (no inpaint)"
+                                )
+                            current_image = inpainted_image
+                            lama_inpaints += len(lama_full_masks)
+                        except Exception as e:
+                            log_message(
+                                f"Full-page LaMa failed ({e}); falling back to CV2 fill",
+                                always_print=True,
+                            )
+                            for region_mask in lama_full_masks:
+                                mask_pil = Image.fromarray(
+                                    (region_mask * 255).astype(np.uint8),
+                                    mode="L",
+                                )
+                                patch = Image.new(
+                                    "RGB",
+                                    current_image.size,
+                                    (255, 255, 255),
+                                )
+                                next_image = current_image.copy()
+                                next_image.paste(patch, (0, 0), mask=mask_pil)
+                                current_image = next_image
+                            cv2_inpaints += len(lama_full_masks)
+
                 if grouped_flux_candidates:
                     grouped_mask = np.zeros((img_h, img_w), dtype=bool)
                     for candidate in grouped_flux_candidates:
@@ -1610,6 +1715,7 @@ def finish_outside_text_work(
                 log_message("Outside text inpainting completed", verbose=verbose)
                 parts = [
                     f"Flux: {flux_inpaints}",
+                    f"LaMa: {lama_inpaints}",
                     f"CV2: {cv2_inpaints}",
                 ]
                 if none_skips:
@@ -1650,6 +1756,7 @@ def process_outside_text(
     bubble_data: list[dict[str, Any]] | None = None,
     text_free_boxes: list[list[float]] | None = None,
     panels: list[tuple[int, int, int, int]] | None = None,
+    output_path: str | Path | None = None,
 ) -> tuple[Image.Image, list[dict[str, Any]]]:
     """
     Process outside text detection, inpainting, and prepare data for translation.
@@ -1681,6 +1788,7 @@ def process_outside_text(
         bubble_data=bubble_data,
         text_free_boxes=text_free_boxes,
         panels=panels,
+        output_path=output_path,
     )
     if work is None:
         return pil_image, []

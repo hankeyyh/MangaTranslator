@@ -55,6 +55,7 @@ class UITranslationProviderSettings:
     xai_api_key: str | None = ""
     meta_api_key: str | None = ""
     deepseek_api_key: str | None = ""
+    deepl_api_key: str | None = ""
     zai_api_key: str | None = ""
     moonshot_api_key: str | None = ""
     mimo_api_key: str | None = ""
@@ -136,6 +137,7 @@ class UIOutsideTextSettings:
         "flux_klein_4b"  # flux_klein_9b, flux_klein_4b, flux_kontext, lama_large, opencv, none
     )
     lama_inpainting_size: int = 2048
+    lama_dump_masks: bool = False
     flux_backend: str = "sdnq"  # "sdcpp", "sdnq", "nunchaku" (Kontext only)
     flux_low_vram: bool = False  # Use CPU offload for SDNQ
     flux_sdcpp_cache_mode: str = "none"
@@ -264,6 +266,7 @@ class UIConfigState:
             "xai_api_key": self.provider_settings.xai_api_key,
             "meta_api_key": self.provider_settings.meta_api_key,
             "deepseek_api_key": self.provider_settings.deepseek_api_key,
+            "deepl_api_key": self.provider_settings.deepl_api_key,
             "zai_api_key": self.provider_settings.zai_api_key,
             "moonshot_api_key": self.provider_settings.moonshot_api_key,
             "mimo_api_key": self.provider_settings.mimo_api_key,
@@ -320,6 +323,7 @@ class UIConfigState:
             "outside_text_flux_group_regions": self.outside_text.flux_group_regions,
             "outside_text_flux_residual_diff_threshold": self.outside_text.flux_residual_diff_threshold,
             "outside_text_lama_inpainting_size": self.outside_text.lama_inpainting_size,
+            "outside_text_lama_dump_masks": self.outside_text.lama_dump_masks,
             "outside_text_osb_confidence": self.outside_text.osb_confidence,
             "outside_text_osb_text_free_only": self.outside_text.osb_text_free_only,
             "outside_text_enable_page_number_filtering": self.outside_text.enable_page_number_filtering,
@@ -511,6 +515,12 @@ class UIConfigState:
                         defaults.get("outside_text_lama_inpainting_size", 2048),
                     )
                 ),
+                lama_dump_masks=bool(
+                    data.get(
+                        "outside_text_lama_dump_masks",
+                        defaults.get("outside_text_lama_dump_masks", False),
+                    )
+                ),
                 osb_confidence=data.get("outside_text_osb_confidence", 0.5),
                 osb_text_free_only=data.get("outside_text_osb_text_free_only", False),
                 osb_font_dir=data.get(
@@ -578,6 +588,9 @@ class UIConfigState:
                 meta_api_key=data.get("meta_api_key", defaults.get("meta_api_key", "")),
                 deepseek_api_key=data.get(
                     "deepseek_api_key", defaults.get("deepseek_api_key", "")
+                ),
+                deepl_api_key=data.get(
+                    "deepl_api_key", defaults.get("deepl_api_key", "")
                 ),
                 zai_api_key=data.get("zai_api_key", defaults.get("zai_api_key", "")),
                 moonshot_api_key=data.get(
@@ -807,6 +820,7 @@ def map_ui_to_backend_config(
         xai_api_key=ui_state.provider_settings.xai_api_key or "",
         meta_api_key=ui_state.provider_settings.meta_api_key or "",
         deepseek_api_key=ui_state.provider_settings.deepseek_api_key or "",
+        deepl_api_key=ui_state.provider_settings.deepl_api_key or "",
         zai_api_key=ui_state.provider_settings.zai_api_key or "",
         moonshot_api_key=ui_state.provider_settings.moonshot_api_key or "",
         mimo_api_key=ui_state.provider_settings.mimo_api_key or "",
@@ -917,6 +931,7 @@ def map_ui_to_backend_config(
         flux_group_regions=ui_state.outside_text.flux_group_regions,
         flux_residual_diff_threshold=ui_state.outside_text.flux_residual_diff_threshold,
         lama_inpainting_size=ui_state.outside_text.lama_inpainting_size,
+        lama_dump_masks=ui_state.outside_text.lama_dump_masks,
         osb_confidence=ui_state.outside_text.osb_confidence,
         osb_text_free_only=ui_state.outside_text.osb_text_free_only,
         osb_font_dir=str(osb_font_path) if osb_font_path else None,

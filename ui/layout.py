@@ -699,29 +699,39 @@ def create_layout(
                             visible=False, elem_classes="settings-group"
                         ) as group_translation:
                             gr.Markdown("### OCR & Translation")
-                            config_translation_mode = gr.Radio(
-                                choices=["one-step", "two-step"],
-                                label="Translation Mode",
-                                value=saved_settings.get(
-                                    "translation_mode",
-                                    settings_manager.DEFAULT_SETTINGS[
-                                        "translation_mode"
-                                    ],
-                                ),
-                                info=(
-                                    "Determines whether to perform OCR and translation together or separately. "
-                                    "'two-step' might improve translation quality for less-capable LLMs."
-                                ),
-                                elem_id="config_translation_mode",
+                            _saved_translation_mode = saved_settings.get(
+                                "translation_mode",
+                                settings_manager.DEFAULT_SETTINGS["translation_mode"],
                             )
-                            initial_ocr_method = saved_settings.get(
+                            _saved_ocr_method = saved_settings.get(
                                 "ocr_method",
                                 settings_manager.DEFAULT_SETTINGS.get(
                                     "ocr_method", "LLM"
                                 ),
                             )
+                            _deepl_selected = config_initial_provider == "DeepL"
+                            if _deepl_selected:
+                                _saved_translation_mode = "two-step"
+                                if _saved_ocr_method == "LLM":
+                                    _saved_ocr_method = "manga-ocr"
+                            config_translation_mode = gr.Radio(
+                                choices=["one-step", "two-step"],
+                                label="Translation Mode",
+                                value=_saved_translation_mode,
+                                info=(
+                                    "Determines whether to perform OCR and translation together or separately. "
+                                    "'two-step' might improve translation quality for less-capable LLMs."
+                                ),
+                                elem_id="config_translation_mode",
+                                interactive=not _deepl_selected,
+                            )
+                            initial_ocr_method = _saved_ocr_method
                             ocr_method_radio = gr.Radio(
-                                choices=["LLM", "manga-ocr", "paddleocr-vl-1.6"],
+                                choices=(
+                                    ["manga-ocr", "paddleocr-vl-1.6"]
+                                    if _deepl_selected
+                                    else ["LLM", "manga-ocr", "paddleocr-vl-1.6"]
+                                ),
                                 label="OCR Method",
                                 value=initial_ocr_method,
                                 info=(
@@ -730,13 +740,7 @@ def create_layout(
                                     "and must be used in 'two-step' translation mode."
                                 ),
                                 elem_id="ocr_method_radio",
-                                interactive=saved_settings.get(
-                                    "translation_mode",
-                                    settings_manager.DEFAULT_SETTINGS[
-                                        "translation_mode"
-                                    ],
-                                )
-                                != "one-step",
+                                interactive=_saved_translation_mode != "one-step",
                             )
 
                             gr.Markdown("### LLM Settings")
@@ -822,6 +826,19 @@ def create_layout(
                                 visible=(config_initial_provider == "DeepSeek"),
                                 elem_id="deepseek_api_key",
                                 info="Stored locally. Or set via DEEPSEEK_API_KEY env var.",
+                            )
+                            deepl_api_key = gr.Textbox(
+                                label="DeepL API Key",
+                                placeholder="Enter DeepL API key",
+                                type="password",
+                                value=saved_settings.get("deepl_api_key", ""),
+                                show_copy_button=False,
+                                visible=(config_initial_provider == "DeepL"),
+                                elem_id="deepl_api_key",
+                                info=(
+                                    "Stored locally. Or set via DEEPL_API_KEY / DEEPL_AUTH_KEY env var. "
+                                    "DeepL is text-only and requires two-step translation with local OCR."
+                                ),
                             )
                             zai_api_key = gr.Textbox(
                                 label="Z.ai API Key",
@@ -1040,7 +1057,8 @@ def create_layout(
                             )
 
                             _initial_enable_web_search_visible = (
-                                config_initial_provider not in ("OpenAI-Compatible",)
+                                config_initial_provider
+                                not in ("OpenAI-Compatible", "DeepL")
                             )
                             (
                                 _initial_enable_web_search_label,
@@ -1247,6 +1265,7 @@ def create_layout(
                                 label="Max Tokens",
                                 info="Maximum number of tokens in the response.",
                                 elem_id="config_max_tokens",
+                                visible=config_initial_provider != "DeepL",
                             )
 
                             gr.Markdown("### Context & Upscaling")
@@ -2295,6 +2314,16 @@ def create_layout(
                                     or saved_settings.get("upscaling_only", False)
                                 ),
                             )
+                            outside_text_lama_dump_masks = gr.Checkbox(
+                                value=saved_settings.get(
+                                    "outside_text_lama_dump_masks", False
+                                ),
+                                label="Dump LaMa Stroke Masks",
+                                info=(
+                                    "Write DBNet raw / stroke / overlay PNGs under the output "
+                                    "directory in lama_mask_debug/. Used to inspect OSB inpaint holes."
+                                ),
+                            )
                         setting_groups.append(group_other)
 
         # --- Define Event Handlers ---
@@ -2319,6 +2348,7 @@ def create_layout(
             xai_api_key,
             meta_api_key,
             deepseek_api_key,
+            deepl_api_key,
             zai_api_key,
             moonshot_api_key,
             mimo_api_key,
@@ -2349,6 +2379,7 @@ def create_layout(
             cleaning_only_toggle,
             upscaling_only_toggle,
             test_mode_toggle,
+            outside_text_lama_dump_masks,
             input_language,
             output_language,
             font_dropdown,
@@ -2456,6 +2487,7 @@ def create_layout(
             xai_api_key,
             meta_api_key,
             deepseek_api_key,
+            deepl_api_key,
             zai_api_key,
             moonshot_api_key,
             mimo_api_key,
@@ -2486,6 +2518,7 @@ def create_layout(
             cleaning_only_toggle,
             upscaling_only_toggle,
             test_mode_toggle,
+            outside_text_lama_dump_masks,
             input_language,
             output_language,
             font_dropdown,
@@ -2594,6 +2627,7 @@ def create_layout(
             xai_api_key,
             meta_api_key,
             deepseek_api_key,
+            deepl_api_key,
             zai_api_key,
             moonshot_api_key,
             mimo_api_key,
@@ -2628,6 +2662,7 @@ def create_layout(
             cleaning_only_toggle,
             upscaling_only_toggle,
             test_mode_toggle,
+            outside_text_lama_dump_masks,
             enable_web_search_checkbox,
             enable_code_execution_checkbox,
             image_detail_dropdown,
@@ -2733,6 +2768,7 @@ def create_layout(
             xai_api_key,
             meta_api_key,
             deepseek_api_key,
+            deepl_api_key,
             zai_api_key,
             moonshot_api_key,
             mimo_api_key,
@@ -2767,6 +2803,7 @@ def create_layout(
             cleaning_only_toggle,
             upscaling_only_toggle,
             test_mode_toggle,
+            outside_text_lama_dump_masks,
             enable_web_search_checkbox,
             enable_code_execution_checkbox,
             image_detail_dropdown,
@@ -2926,6 +2963,7 @@ def create_layout(
                 ocr_method_radio,
                 use_custom_sampling_checkbox,
                 opencode_tier,
+                config_translation_mode,
             ],
             outputs=[
                 google_api_key,
@@ -2934,6 +2972,7 @@ def create_layout(
                 xai_api_key,
                 meta_api_key,
                 deepseek_api_key,
+                deepl_api_key,
                 zai_api_key,
                 moonshot_api_key,
                 mimo_api_key,
@@ -2958,6 +2997,8 @@ def create_layout(
                 reasoning_effort_dropdown,
                 effort_dropdown,
                 verbosity_dropdown,
+                config_translation_mode,
+                ocr_method_radio,
             ],
             queue=False,
         ).then(  # Trigger model fetch *after* provider change updates visibility etc.
@@ -3493,8 +3534,8 @@ def create_layout(
         # Translation mode change handler - disable OCR selection when one-step
         config_translation_mode.change(
             fn=callbacks.handle_translation_mode_change,
-            inputs=[config_translation_mode, ocr_method_radio],
-            outputs=ocr_method_radio,
+            inputs=[config_translation_mode, ocr_method_radio, provider_selector],
+            outputs=[config_translation_mode, ocr_method_radio],
             queue=False,
         )
 

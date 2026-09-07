@@ -46,6 +46,7 @@ class TranslationConfig:
     xai_api_key: str = ""
     meta_api_key: str = ""
     deepseek_api_key: str = ""
+    deepl_api_key: str = ""
     zai_api_key: str = ""
     moonshot_api_key: str = ""
     mimo_api_key: str = ""
@@ -137,6 +138,13 @@ class OutsideTextConfig:
         "flux_klein_4b"  # flux_klein_9b, flux_klein_4b, flux_kontext, lama_large, opencv, none
     )
     lama_inpainting_size: int = 2048
+    lama_use_dbnet_mask: bool = True
+    lama_detect_size: int = 2048
+    lama_mask_dilation_offset: int = 15
+    lama_mask_max_dilation: int = 15
+    lama_kernel_size: int = 3
+    lama_use_crf: bool = True
+    lama_dump_masks: bool = False
     flux_backend: str = "sdnq"  # "sdcpp", "sdnq", "nunchaku" (Kontext only)
     flux_low_vram: bool = False  # Use CPU offload for SDNQ
     flux_sdcpp_cache_mode: str = "none"
@@ -234,6 +242,10 @@ class MangaTranslatorConfig:
             ) or os.environ.get("META_API_KEY", "")
         if not self.translation.deepseek_api_key:
             self.translation.deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+        if not self.translation.deepl_api_key:
+            self.translation.deepl_api_key = os.environ.get(
+                "DEEPL_API_KEY"
+            ) or os.environ.get("DEEPL_AUTH_KEY", "")
         if not self.translation.zai_api_key:
             self.translation.zai_api_key = os.environ.get("ZAI_API_KEY", "")
         if not self.translation.moonshot_api_key:

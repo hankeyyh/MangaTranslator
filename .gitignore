@@ -27,6 +27,8 @@ start-webui.sh
 /models/paddleocr-vl-1.6/
 /models/sdcpp/
 /models/rtdetr/
+/models/dbnet/
+/models/lama/
 /output/
 .DS_Store
 Thumbs.db

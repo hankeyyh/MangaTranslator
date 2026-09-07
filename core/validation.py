@@ -44,6 +44,11 @@ SETTING_CONSTRAINTS: dict[str, tuple[float, float]] = {
     "outside_text_min_area_ignore_ratio": (0.0, 0.05),
     "outside_text_flux_num_inference_steps": (1, 30),
     "outside_text_flux_residual_diff_threshold": (0.0, 1.0),
+    "outside_text_lama_inpainting_size": (512, 4096),
+    "outside_text_lama_detect_size": (512, 4096),
+    "outside_text_lama_mask_dilation_offset": (0, 40),
+    "outside_text_lama_mask_max_dilation": (3, 41),
+    "outside_text_lama_kernel_size": (1, 9),
     "outside_text_osb_max_font_size": (5, 96),
     "outside_text_osb_min_font_size": (5, 96),
     "outside_text_osb_line_spacing": (0.5, 2.0),
@@ -120,6 +125,15 @@ _CONFIG_ATTR_PATHS: dict[str, tuple[tuple[str, ...], ...]] = {
     "outside_text_flux_residual_diff_threshold": (
         ("outside_text", "flux_residual_diff_threshold"),
     ),
+    "outside_text_lama_inpainting_size": (("outside_text", "lama_inpainting_size"),),
+    "outside_text_lama_detect_size": (("outside_text", "lama_detect_size"),),
+    "outside_text_lama_mask_dilation_offset": (
+        ("outside_text", "lama_mask_dilation_offset"),
+    ),
+    "outside_text_lama_mask_max_dilation": (
+        ("outside_text", "lama_mask_max_dilation"),
+    ),
+    "outside_text_lama_kernel_size": (("outside_text", "lama_kernel_size"),),
     "outside_text_osb_max_font_size": (("outside_text", "osb_max_font_size"),),
     "outside_text_osb_min_font_size": (("outside_text", "osb_min_font_size"),),
     "outside_text_osb_line_spacing": (("outside_text", "osb_line_spacing"),),

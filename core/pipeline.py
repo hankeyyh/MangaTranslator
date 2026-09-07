@@ -855,6 +855,7 @@ def translate_and_render(
             bubble_data=bubble_data,
             text_free_boxes=text_free_boxes,
             panels=panels,
+            output_path=output_path,
         )
         outside_text_data = (
             outside_work.outside_text_data if outside_work is not None else []
@@ -872,6 +873,7 @@ def translate_and_render(
             bubble_data=bubble_data,
             text_free_boxes=text_free_boxes,
             panels=panels,
+            output_path=output_path,
         )
         original_cv_image = pil_to_cv2(pil_image_processed)
 

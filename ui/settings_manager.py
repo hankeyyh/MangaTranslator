@@ -91,6 +91,9 @@ PROVIDER_MODELS: dict[str, list[str]] = {
         "deepseek-v4-pro",
         "deepseek-v4-flash",
     ],
+    "DeepL": [
+        "deepl",
+    ],
     "Z.ai": [
         "glm-5.3-flash",
         "glm-5.3",
@@ -133,6 +136,7 @@ DEFAULT_SETTINGS = {
     "xai_api_key": "",
     "meta_api_key": "",
     "deepseek_api_key": "",
+    "deepl_api_key": "",
     "zai_api_key": "",
     "moonshot_api_key": "",
     "mimo_api_key": "",
@@ -162,6 +166,7 @@ DEFAULT_SETTINGS = {
         "DeepSeek": (
             PROVIDER_MODELS["DeepSeek"][0] if PROVIDER_MODELS["DeepSeek"] else None
         ),
+        "DeepL": PROVIDER_MODELS["DeepL"][0] if PROVIDER_MODELS["DeepL"] else None,
         "Z.ai": PROVIDER_MODELS["Z.ai"][0] if PROVIDER_MODELS["Z.ai"] else None,
         "Moonshot AI": (
             PROVIDER_MODELS["Moonshot AI"][0]
@@ -263,6 +268,7 @@ DEFAULT_SETTINGS = {
     "outside_text_flux_group_regions": False,
     "outside_text_flux_residual_diff_threshold": 0.15,
     "outside_text_lama_inpainting_size": 2048,
+    "outside_text_lama_dump_masks": False,
     "outside_text_osb_confidence": 0.5,
     "outside_text_osb_text_free_only": False,
     "outside_text_enable_page_number_filtering": False,
@@ -322,6 +328,7 @@ CANONICAL_CONFIG_KEY_ORDER: list[str] = [
     "anthropic_api_key",
     "xai_api_key",
     "deepseek_api_key",
+    "deepl_api_key",
     "zai_api_key",
     "moonshot_api_key",
     "mimo_api_key",
@@ -399,6 +406,7 @@ CANONICAL_CONFIG_KEY_ORDER: list[str] = [
     "outside_text_flux_group_regions",
     "outside_text_flux_residual_diff_threshold",
     "outside_text_lama_inpainting_size",
+    "outside_text_lama_dump_masks",
     "outside_text_osb_confidence",
     "outside_text_osb_text_free_only",
     "outside_text_enable_page_number_filtering",
@@ -622,6 +630,12 @@ def get_saved_settings() -> dict[str, Any]:
             provider_models_dict = settings.get(
                 "provider_models", DEFAULT_SETTINGS["provider_models"]
             )
+            if isinstance(provider_models_dict, dict):
+                for provider_name, default_model in DEFAULT_SETTINGS[
+                    "provider_models"
+                ].items():
+                    provider_models_dict.setdefault(provider_name, default_model)
+                settings["provider_models"] = provider_models_dict
             saved_model_for_provider = provider_models_dict.get(loaded_provider)
 
             if (
@@ -709,6 +723,7 @@ def reset_to_defaults() -> dict[str, Any]:
             "xai_api_key",
             "meta_api_key",
             "deepseek_api_key",
+            "deepl_api_key",
             "zai_api_key",
             "moonshot_api_key",
             "mimo_api_key",

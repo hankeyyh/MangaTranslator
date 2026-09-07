@@ -548,8 +548,18 @@ class OutsideTextDetector:
         verbose: bool = False,
         image_override: Image.Image | None = None,
         existing_results: list | None = None,
+        stroke_source: str | None = None,
+        stroke_detect_size: int = 2048,
+        stroke_dilation_offset: int = 15,
+        stroke_kernel_size: int = 3,
+        stroke_use_crf: bool = True,
+        stroke_max_dilate: int = 15,
+        stroke_dump_dir: str | None = None,
     ) -> tuple[list | None, Image.Image | None]:
-        """Create rectangular masks from OCR bounding boxes for inpainting.
+        """Create masks from OCR bounding boxes for inpainting.
+
+        ``stroke_source="dbnet"`` replaces filled rectangles with DBNet+CRF
+        stroke masks. Bounding boxes used for grouping/rendering are unchanged.
 
         Args:
             image_path: Path to the input image.
@@ -724,7 +734,112 @@ class OutsideTextDetector:
             verbose=verbose,
         )
 
+        if stroke_source == "dbnet" and groups:
+            groups = self._apply_dbnet_stroke_masks(
+                image_pil,
+                groups,
+                detect_size=stroke_detect_size,
+                dilation_offset=stroke_dilation_offset,
+                kernel_size=stroke_kernel_size,
+                use_crf=stroke_use_crf,
+                max_dilate=stroke_max_dilate,
+                dump_dir=stroke_dump_dir,
+                dump_stem=os.path.splitext(os.path.basename(image_path))[0] or "page",
+                verbose=verbose,
+            )
+
         return groups, image_pil
+
+    def _apply_dbnet_stroke_masks(
+        self,
+        image_pil: Image.Image,
+        groups: list,
+        detect_size: int,
+        dilation_offset: int,
+        kernel_size: int,
+        use_crf: bool,
+        max_dilate: int,
+        dump_dir: str | None,
+        dump_stem: str,
+        verbose: bool,
+    ) -> list:
+        try:
+            from core.image.text_detector import detect_text_raw_mask
+            from core.image.text_mask_refine import dump_stroke_debug, refine_box_masks
+
+            image_rgb = np.asarray(image_pil.convert("RGB"))
+            raw_mask = detect_text_raw_mask(
+                image_rgb, detect_size=detect_size, verbose=verbose
+            )
+            log_message(
+                "Refining OSB masks with DBNet raw mask"
+                + (" + CRF" if use_crf else ""),
+                verbose=verbose,
+            )
+            page_stroke = np.zeros(image_rgb.shape[:2], dtype=bool)
+            for group in groups:
+                boxes = []
+                for individual in group.get("individual_masks") or []:
+                    ys, xs = np.where(np.asarray(individual))
+                    if ys.size == 0 or xs.size == 0:
+                        continue
+                    boxes.append(
+                        (
+                            int(xs.min()),
+                            int(ys.min()),
+                            int(xs.max()) + 1,
+                            int(ys.max()) + 1,
+                        )
+                    )
+                if not boxes:
+                    bbox = group.get("bbox") or {}
+                    x = int(bbox.get("x", 0))
+                    y = int(bbox.get("y", 0))
+                    boxes.append(
+                        (
+                            x,
+                            y,
+                            x + int(bbox.get("width", 0)),
+                            y + int(bbox.get("height", 0)),
+                        )
+                    )
+                stroke = refine_box_masks(
+                    image_rgb,
+                    raw_mask,
+                    boxes,
+                    dilation_offset=dilation_offset,
+                    kernel_size=kernel_size,
+                    use_crf=use_crf,
+                    max_dilate=max_dilate,
+                    verbose=verbose,
+                )
+                if np.any(stroke):
+                    group["combined_mask"] = stroke
+                    group["individual_masks"] = [stroke]
+                    group["stroke_refined"] = True
+                    page_stroke |= np.asarray(stroke, dtype=bool)
+                else:
+                    group["stroke_refined"] = False
+            if dump_dir:
+                try:
+                    out_dir = dump_stroke_debug(
+                        image_rgb, raw_mask, page_stroke, dump_dir, dump_stem
+                    )
+                    log_message(
+                        f"Wrote LaMa stroke debug masks to {out_dir}",
+                        always_print=True,
+                    )
+                except Exception as dump_error:
+                    log_message(
+                        f"Failed to dump LaMa stroke debug masks ({dump_error})",
+                        always_print=True,
+                    )
+        except Exception as e:
+            log_message(
+                f"DBNet stroke refine failed ({e}); keeping rectangular OSB masks",
+                always_print=True,
+            )
+        return groups
 
     def _group_text_boxes_spatially(
         self, boxes, results, img_w, img_h, text_box_proximity_ratio=0.02, verbose=False

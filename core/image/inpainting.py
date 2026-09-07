@@ -1818,6 +1818,63 @@ class LamaLargeInpainter:
         dest[y1:y2, x1:x2] = src * alpha + dest[y1:y2, x1:x2] * (1.0 - alpha)
         return Image.fromarray(np.clip(dest, 0, 255).astype(np.uint8))
 
+    def inpaint_full(
+        self,
+        image_pil: Image.Image,
+        mask_np: np.ndarray,
+        seed: int = 1,
+        verbose: bool = False,
+        ocr_params: dict | None = None,
+    ) -> Image.Image:
+        """Inpaint the full page with one LaMa forward, matching MIT's window."""
+        mask_np = np.asarray(mask_np)
+        if mask_np.dtype != bool:
+            mask_np = mask_np > 0
+        if not np.any(mask_np):
+            return image_pil
+
+        image_rgb = image_pil.convert("RGB")
+        log_message(
+            f"  - LaMa Large full-page inpainting {image_rgb.size[0]}x{image_rgb.size[1]}",
+            verbose=verbose,
+        )
+
+        cache_params = {
+            "method": "lama_large_full",
+            "inpainting_size": self.inpainting_size,
+        }
+        if ocr_params:
+            cache_params.update(ocr_params)
+
+        cache_key = None
+        cached = None
+        if self.cache.should_use_inpaint_cache(seed):
+            cache_key = self.cache.get_inpaint_cache_key(
+                image_rgb,
+                mask_np.astype(np.uint8),
+                seed,
+                1,
+                0.0,
+                0.0,
+                "lama_large_full",
+                cache_params,
+            )
+            cached = self.cache.get_inpainted_image(cache_key)
+            if cached is not None:
+                log_message("  - Using cached full-page LaMa result", verbose=verbose)
+                return cached
+
+        inpainted = self._run_lama(image_rgb, mask_np, verbose=verbose)
+        src = np.asarray(inpainted, dtype=np.float32)
+        dest = np.asarray(image_rgb, dtype=np.float32)
+        alpha = mask_np.astype(np.float32)[..., None]
+        blended = src * alpha + dest * (1.0 - alpha)
+        result = Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8))
+
+        if self.cache.should_use_inpaint_cache(seed) and cache_key is not None:
+            self.cache.set_inpainted_image(cache_key, result)
+        return result
+
     def _resize_keep_aspect(
         self, image: np.ndarray, mask: np.ndarray, max_side: int
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -1834,23 +1891,19 @@ class LamaLargeInpainter:
 
     def _pad_to_mod(
         self, image: np.ndarray, mask: np.ndarray
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, int, int]:
         height, width = image.shape[:2]
-        new_h = (
-            height
-            if height % self.PAD_MOD == 0
-            else height + (self.PAD_MOD - height % self.PAD_MOD)
+        pad_h = 0 if height % self.PAD_MOD == 0 else self.PAD_MOD - height % self.PAD_MOD
+        pad_w = 0 if width % self.PAD_MOD == 0 else self.PAD_MOD - width % self.PAD_MOD
+        if pad_h == 0 and pad_w == 0:
+            return image, mask, 0, 0
+        image = cv2.copyMakeBorder(
+            image, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=0
         )
-        new_w = (
-            width
-            if width % self.PAD_MOD == 0
-            else width + (self.PAD_MOD - width % self.PAD_MOD)
+        mask = cv2.copyMakeBorder(
+            mask, 0, pad_h, 0, pad_w, cv2.BORDER_CONSTANT, value=0
         )
-        if new_h == height and new_w == width:
-            return image, mask
-        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-        return image, mask
+        return image, mask, pad_h, pad_w
 
     def _run_lama(
         self, image_crop: Image.Image, mask_crop: np.ndarray, verbose: bool = False
@@ -1861,7 +1914,8 @@ class LamaLargeInpainter:
         image_np, mask_np = self._resize_keep_aspect(
             image_np, mask_np, self.inpainting_size
         )
-        image_np, mask_np = self._pad_to_mod(image_np, mask_np)
+        resized_h, resized_w = image_np.shape[:2]
+        image_np, mask_np, pad_h, pad_w = self._pad_to_mod(image_np, mask_np)
 
         img_torch = (
             torch.from_numpy(image_np).permute(2, 0, 1).unsqueeze(0).float() / 255.0
@@ -1891,6 +1945,8 @@ class LamaLargeInpainter:
 
         out = out.float().cpu().squeeze(0).permute(1, 2, 0).numpy()
         out = np.clip(out * 255.0, 0, 255).astype(np.uint8)
+        if pad_h or pad_w:
+            out = out[:resized_h, :resized_w]
         if out.shape[0] != orig_h or out.shape[1] != orig_w:
             out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
         return Image.fromarray(out)

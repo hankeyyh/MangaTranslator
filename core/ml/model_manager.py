@@ -53,6 +53,7 @@ class ModelType(Enum):
     FLUX_KONTEXT_SDCPP_CLIP_L = "flux_kontext_sdcpp_clip_l"
     FLUX_KONTEXT_SDCPP_VAE = "flux_kontext_sdcpp_vae"
     LAMA_LARGE = "lama_large"
+    DBNET_TEXT = "dbnet_text"
 
 
 class ModelManager:
@@ -144,6 +145,7 @@ class ModelManager:
                 flux_kontext_sdcpp_dir / "ae.safetensors"
             ),
             ModelType.LAMA_LARGE: (model_dir / "lama" / "lama_large_512px.ckpt"),
+            ModelType.DBNET_TEXT: (model_dir / "dbnet" / "detect-20241225.ckpt"),
         }
 
     def _init_model_urls(self):
@@ -173,7 +175,24 @@ class ModelManager:
                 "https://huggingface.co/dreMaz/AnimeMangaInpainting/resolve/main/"
                 "lama_large_512px.ckpt"
             ),
+            ModelType.DBNET_TEXT: (
+                "https://github.com/zyddnys/manga-image-translator/releases/download/"
+                "beta-0.3/detect-20241225.ckpt"
+            ),
         }
+
+    @staticmethod
+    def _dbnet_download_urls() -> tuple[str, ...]:
+        return (
+            (
+                "https://github.com/zyddnys/manga-image-translator/releases/download/"
+                "beta-0.3/detect-20241225.ckpt"
+            ),
+            (
+                "https://www.modelscope.cn/models/hgmzhn/manga-translator-ui/resolve/"
+                "master/detect-20241225.ckpt"
+            ),
+        )
 
     def _init_hf_repos(self):
         """Initialize Hugging Face repository information."""
@@ -1418,6 +1437,41 @@ class ModelManager:
             log_message("LaMa Large loaded.", verbose=verbose)
             return model
 
+    def load_dbnet(self, verbose: bool = False):
+        """Load manga-image-translator DBNet text detector weights."""
+        with self._lock:
+            if self.is_loaded(ModelType.DBNET_TEXT):
+                return self.models[ModelType.DBNET_TEXT]
+
+            log_message(
+                "Loading DBNet text detector (detect-20241225)...",
+                verbose=verbose,
+            )
+            path = self.model_paths[ModelType.DBNET_TEXT]
+            last_error = None
+            for url in self._dbnet_download_urls():
+                try:
+                    self._ensure_file(path, url, verbose=verbose)
+                    last_error = None
+                    break
+                except Exception as e:
+                    last_error = e
+            if last_error is not None:
+                raise ModelError(
+                    f"Failed to download DBNet from all mirrors: {last_error}"
+                ) from last_error
+
+            from core.ml.dbnet_arch import load_dbnet_detector
+
+            try:
+                model = load_dbnet_detector(path, self.device)
+            except Exception as e:
+                raise ModelError(f"Failed to load DBNet from {path}: {e}") from e
+
+            self.models[ModelType.DBNET_TEXT] = model
+            log_message("DBNet text detector loaded.", verbose=verbose)
+            return model
+
     def load_flux_klein_4b(self, low_vram: bool = False, verbose: bool = False):
         """Load Flux.2 Klein 4B pipeline with FP8 transformer.
 
@@ -1550,6 +1604,12 @@ class ModelManager:
         if self.is_loaded(ModelType.LAMA_LARGE):
             self.unload_model(ModelType.LAMA_LARGE, force_gc=True, verbose=verbose)
             log_message("LaMa Large unloaded.", verbose=verbose)
+
+    def unload_dbnet(self, verbose: bool = False):
+        """Unload DBNet text detector."""
+        if self.is_loaded(ModelType.DBNET_TEXT):
+            self.unload_model(ModelType.DBNET_TEXT, force_gc=True, verbose=verbose)
+            log_message("DBNet text detector unloaded.", verbose=verbose)
 
     def unload_all(self, verbose: bool = False):
         """Unload all models and free all GPU memory."""

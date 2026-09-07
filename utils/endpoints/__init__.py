@@ -1,4 +1,5 @@
 from .anthropic import call_anthropic_endpoint
+from .deepl import call_deepl_endpoint
 from .deepseek import call_deepseek_endpoint
 from .google import call_gemini_endpoint
 from .meta_model import call_meta_model_endpoint
@@ -14,6 +15,7 @@ from .zai import call_zai_endpoint
 
 __all__ = [
     "call_anthropic_endpoint",
+    "call_deepl_endpoint",
     "call_deepseek_endpoint",
     "call_gemini_endpoint",
     "call_meta_model_endpoint",

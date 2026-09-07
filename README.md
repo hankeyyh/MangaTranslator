@@ -143,10 +143,10 @@ fonts/
 
 ### LLM setup
 
-- Providers: Google, OpenAI, Anthropic, SpaceXAI, Meta Model, DeepSeek, Z.ai, Moonshot AI, Xiaomi MiMo, QwenCloud, OpenCode, OpenRouter, OpenAI-Compatible
+- Providers: Google, OpenAI, Anthropic, SpaceXAI, Meta Model, DeepSeek, DeepL, Z.ai, Moonshot AI, Xiaomi MiMo, QwenCloud, OpenCode, OpenRouter, OpenAI-Compatible
 - Web UI: configure provider/model/key in the Config tab (stored locally)
 - CLI: pass keys/URLs as flags or via env vars
-- Env vars: `GOOGLE_API_KEY` / `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `SPACEXAI_API_KEY` / `XAI_API_KEY`, `META_MODEL_API_KEY` / `META_API_KEY`, `DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `MOONSHOT_API_KEY`, `MIMO_API_KEY`, `QWENCLOUD_API_KEY` / `QWEN_API_KEY`, `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY` / `OPENCODE_GO_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`
+- Env vars: `GOOGLE_API_KEY` / `GEMINI_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `SPACEXAI_API_KEY` / `XAI_API_KEY`, `META_MODEL_API_KEY` / `META_API_KEY`, `DEEPSEEK_API_KEY`, `DEEPL_API_KEY` / `DEEPL_AUTH_KEY`, `ZAI_API_KEY`, `MOONSHOT_API_KEY`, `MIMO_API_KEY`, `QWENCLOUD_API_KEY` / `QWEN_API_KEY`, `OPENCODE_API_KEY` / `OPENCODE_ZEN_API_KEY` / `OPENCODE_GO_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_COMPATIBLE_API_KEY`
 - OpenAI-Compatible provider supports local endpoints (e.g., `http://localhost:8080/v1`), and Azure OpenAI endpoints (e.g., `https://<resource>.openai.azure.com`)
 
 > [!NOTE]
@@ -154,6 +154,8 @@ fonts/
 >
 > - **YanoljaNEXT-Rosetta** (e.g., `yanolja/YanoljaNEXT-Rosetta-4B-2511-GGUF`)
 > - **Hy-MT2** (e.g., `tencent/Hy-MT2-7B`). Also pre-fills the model's recommended sampling parameters
+>
+> **DeepL** is a text-only machine translation API (not an LLM). It requires two-step translation with local OCR (`manga-ocr` or `paddleocr-vl-1.6`). Set `DEEPL_API_KEY` or `DEEPL_AUTH_KEY`.
 
 ### OSB text setup (optional)
 

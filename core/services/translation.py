@@ -17,6 +17,7 @@ from core.image.ocr_detection import (
 )
 from utils.endpoints import (
     call_anthropic_endpoint,
+    call_deepl_endpoint,
     call_deepseek_endpoint,
     call_gemini_endpoint,
     call_meta_model_endpoint,
@@ -354,6 +355,8 @@ def _build_generation_config(
             is_reasoning = is_openai_compatible_reasoning_model(model_name)
         elif provider == "DeepSeek":
             is_reasoning = is_deepseek_reasoning_model(model_name)
+        elif provider == "DeepL":
+            is_reasoning = False
         elif provider == "Z.ai":
             is_reasoning = is_zai_reasoning_model(model_name)
         elif provider == "Moonshot AI":
@@ -555,6 +558,9 @@ def _build_generation_config(
             if thinking_type == "enabled":
                 generation_config["reasoning_effort"] = reasoning_effort
         return generation_config
+
+    elif provider == "DeepL":
+        return {}
 
     elif provider == "Z.ai":
         is_reasoning = is_zai_reasoning_model(model_name)
@@ -971,6 +977,11 @@ def _call_llm_endpoint(
                 debug=debug,
                 enable_web_search=config.enable_web_search,
             )
+        elif provider == "DeepL":
+            raise TranslationError(
+                "DeepL is a text-only translator and cannot handle LLM/vision requests. "
+                "Use two-step translation with manga-ocr or paddleocr-vl-1.6."
+            )
         elif provider == "Z.ai":
             api_key = config.zai_api_key
             if not api_key:
@@ -1300,6 +1311,44 @@ def _format_special_instructions(config: TranslationConfig) -> str:
 {config.special_instructions.strip()}
 """
     return ""
+
+
+def _prepare_deepl_translation(config: TranslationConfig) -> None:
+    """Force DeepL onto the only supported path: two-step + local OCR."""
+    if config.ocr_method == "LLM":
+        raise TranslationError(
+            "DeepL is a text-only translator and cannot OCR images. "
+            "Use two-step translation with manga-ocr or paddleocr-vl-1.6."
+        )
+    if config.translation_mode != "two-step":
+        log_message(
+            "DeepL is text-only; using two-step translation with local OCR",
+            always_print=True,
+        )
+        config.translation_mode = "two-step"
+
+
+def _translate_texts_with_deepl(
+    config: TranslationConfig,
+    texts: list[str],
+    debug: bool = False,
+) -> list[str]:
+    """Translate OCR strings through DeepL, sharing the batch request budget."""
+    coordinator = getattr(config, "request_coordinator", None)
+    if coordinator is not None and not coordinator.in_slot():
+        return coordinator.run(_translate_texts_with_deepl, config, texts, debug)
+
+    api_key = config.deepl_api_key
+    if not api_key:
+        raise TranslationError("DeepL API key is missing.")
+    return call_deepl_endpoint(
+        api_key=api_key,
+        texts=texts,
+        source_language=config.input_language,
+        target_language=config.output_language,
+        context=config.special_instructions,
+        debug=debug,
+    )
 
 
 def _build_rosetta_instruction(
@@ -1796,6 +1845,10 @@ def call_translation_api_batch(
         base_parts.append(previous_part)
 
     try:
+        if provider == "DeepL":
+            _prepare_deepl_translation(config)
+            translation_mode = config.translation_mode
+
         if translation_mode == "two-step":
             ocr_prompt = f"""
 ## CONTEXT
@@ -1911,9 +1964,15 @@ The target language is {output_language}. Use the appropriate translation approa
                     )
                 translation_parts.append(previous_part)
 
+            use_deepl = provider == "DeepL"
             use_rosetta = is_rosetta_model(model_name)
             use_hy_mt2 = is_hy_mt2_model(model_name)
-            if use_rosetta:
+            if use_deepl:
+                log_message("Starting DeepL translation", verbose=debug)
+                final_translations = _translate_texts_with_deepl(
+                    config, formatted_texts, debug
+                )
+            elif use_rosetta:
                 log_message(
                     "YanoljaNEXT Rosetta model detected — using Rosetta prompt format",
                     always_print=True,
@@ -1944,28 +2003,29 @@ The target language is {output_language}. Use the appropriate translation approa
                         config.send_full_page_context and bool(full_image_b64)
                     ),
                 )
-            translation_response_text = _call_llm_endpoint(
-                config,
-                translation_parts,
-                translation_prompt,
-                debug,
-                system_prompt=translation_system,
-                prompt_cache_key=session_prompt_cache_key,
-            )
-            if use_rosetta or use_hy_mt2:
-                final_translations = _parse_rosetta_response(
-                    translation_response_text,
-                    total_elements,
-                    provider + "-Translate",
+            if not use_deepl:
+                translation_response_text = _call_llm_endpoint(
+                    config,
+                    translation_parts,
+                    translation_prompt,
                     debug,
+                    system_prompt=translation_system,
+                    prompt_cache_key=session_prompt_cache_key,
                 )
-            else:
-                final_translations = _parse_llm_response_unified(
-                    translation_response_text,
-                    total_elements,
-                    provider + "-Translate",
-                    debug,
-                )
+                if use_rosetta or use_hy_mt2:
+                    final_translations = _parse_rosetta_response(
+                        translation_response_text,
+                        total_elements,
+                        provider + "-Translate",
+                        debug,
+                    )
+                else:
+                    final_translations = _parse_llm_response_unified(
+                        translation_response_text,
+                        total_elements,
+                        provider + "-Translate",
+                        debug,
+                    )
 
             if final_translations is None:
                 log_message("Translation API call failed", always_print=True)

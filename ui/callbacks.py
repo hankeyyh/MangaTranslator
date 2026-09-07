@@ -114,6 +114,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         xai_api_key,
         meta_api_key,
         deepseek_api_key,
+        deepl_api_key,
         zai_api_key,
         moonshot_api_key,
         mimo_api_key,
@@ -148,6 +149,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         cleaning_only_toggle,
         upscaling_only_val,
         test_mode_toggle,
+        outside_text_lama_dump_masks_val,
         enable_web_search_val,
         enable_code_execution_val,
         image_detail_val,
@@ -276,6 +278,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
                 outside_text_flux_residual_diff_threshold_val
             ),
             lama_inpainting_size=int(outside_text_lama_inpainting_size_val),
+            lama_dump_masks=bool(outside_text_lama_dump_masks_val),
             osb_confidence=float(outside_text_osb_confidence_val),
             osb_text_free_only=bool(outside_text_osb_text_free_only_val),
             min_area_ignore_ratio=float(outside_text_min_area_ignore_ratio_percent_val)
@@ -332,6 +335,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             xai_api_key=xai_api_key,
             meta_api_key=meta_api_key,
             deepseek_api_key=deepseek_api_key,
+            deepl_api_key=deepl_api_key,
             zai_api_key=zai_api_key,
             moonshot_api_key=moonshot_api_key,
             mimo_api_key=mimo_api_key,
@@ -448,6 +452,8 @@ def _validate_ui_state(ui_state: UIConfigState) -> None:
             api_key_to_validate = ui_state.provider_settings.meta_api_key
         elif provider_selector == "DeepSeek":
             api_key_to_validate = ui_state.provider_settings.deepseek_api_key
+        elif provider_selector == "DeepL":
+            api_key_to_validate = ui_state.provider_settings.deepl_api_key
         elif provider_selector == "Z.ai":
             api_key_to_validate = ui_state.provider_settings.zai_api_key
         elif provider_selector == "Moonshot AI":
@@ -470,6 +476,18 @@ def _validate_ui_state(ui_state: UIConfigState) -> None:
             provider_selector == "OpenAI-Compatible" and not api_key_to_validate
         ):
             raise gr.Error(f"{ERROR_PREFIX}{api_msg}")
+
+    if (
+        ui_state.provider_settings.provider == "DeepL"
+        and not ui_state.general.cleaning_only
+        and not ui_state.general.upscaling_only
+        and not ui_state.general.test_mode
+        and ui_state.llm_settings.ocr_method == "LLM"
+    ):
+        raise gr.Error(
+            f"{ERROR_PREFIX}DeepL is text-only. Use two-step translation with "
+            "manga-ocr or paddleocr-vl-1.6."
+        )
 
     if (
         ui_state.provider_settings.provider == "OpenAI-Compatible"
@@ -1072,6 +1090,7 @@ def handle_save_config_click(*args: Any) -> str:
         xai_key,
         meta_key,
         deepseek_key,
+        deepl_key,
         zai_key,
         moonshot_key,
         mimo_key,
@@ -1102,6 +1121,7 @@ def handle_save_config_click(*args: Any) -> str:
         cleaning_only_val,
         upscaling_only_val,
         test_mode_val,
+        outside_text_lama_dump_masks_val,
         s_in_lang,
         s_out_lang,
         s_font,
@@ -1222,6 +1242,7 @@ def handle_save_config_click(*args: Any) -> str:
                 outside_text_flux_residual_diff_threshold_val
             ),
             lama_inpainting_size=int(outside_text_lama_inpainting_size_val),
+            lama_dump_masks=bool(outside_text_lama_dump_masks_val),
             osb_confidence=float(outside_text_osb_confidence_val),
             osb_text_free_only=bool(outside_text_osb_text_free_only_val),
             min_area_ignore_ratio=float(outside_text_min_area_ignore_ratio_percent_val)
@@ -1278,6 +1299,7 @@ def handle_save_config_click(*args: Any) -> str:
             xai_api_key=xai_key,
             meta_api_key=meta_key,
             deepseek_api_key=deepseek_key,
+            deepl_api_key=deepl_key,
             zai_api_key=zai_key,
             moonshot_api_key=moonshot_key,
             mimo_api_key=mimo_key,
@@ -1414,6 +1436,7 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> list[gr.update]:
     xai_visible = default_provider == "SpaceXAI"
     meta_visible = default_provider == "Meta Model"
     deepseek_visible = default_provider == "DeepSeek"
+    deepl_visible = default_provider == "DeepL"
     zai_visible = default_provider == "Z.ai"
     moonshot_visible = default_provider == "Moonshot AI"
     mimo_visible = default_provider == "Xiaomi MiMo"
@@ -1532,6 +1555,10 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> list[gr.update]:
             visible=deepseek_visible,
         ),
         gr.update(
+            value=default_ui_state.provider_settings.deepl_api_key,
+            visible=deepl_visible,
+        ),
+        gr.update(
             value=default_ui_state.provider_settings.zai_api_key,
             visible=zai_visible,
         ),
@@ -1592,9 +1619,16 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> list[gr.update]:
             value=default_ui_state.general.use_custom_sampling,
             visible=use_custom_sampling_visible,
         ),
-        gr.update(value=max_tokens_val),
-        gr.update(value=default_ui_state.llm_settings.translation_mode),
-        gr.update(value=default_ui_state.llm_settings.ocr_method),
+        gr.update(value=max_tokens_val, visible=default_provider != "DeepL"),
+        gr.update(
+            value=default_ui_state.llm_settings.translation_mode,
+            interactive=True,
+        ),
+        gr.update(
+            value=default_ui_state.llm_settings.ocr_method,
+            choices=["LLM", "manga-ocr", "paddleocr-vl-1.6"],
+            interactive=default_ui_state.llm_settings.translation_mode != "one-step",
+        ),
         default_ui_state.rendering.max_font_size,
         default_ui_state.rendering.min_font_size,
         default_ui_state.rendering.line_spacing_mult,
@@ -1608,6 +1642,7 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> list[gr.update]:
         default_ui_state.general.cleaning_only,
         default_ui_state.general.upscaling_only,
         default_ui_state.general.test_mode,
+        default_ui_state.outside_text.lama_dump_masks,
         default_ui_state.input_language,
         default_ui_state.output_language,
         gr.update(value=default_ui_state.font_pack),
@@ -1753,6 +1788,7 @@ def handle_provider_change(
     ocr_method: str = "LLM",
     use_custom_sampling: bool = True,
     opencode_tier: str | None = None,
+    translation_mode: str = "one-step",
 ):
     """Handles changes in the provider selector."""
     from core.caching import get_cache
@@ -1760,9 +1796,29 @@ def handle_provider_change(
     cache = get_cache()
     cache.clear_translation_cache()
     cache.clear_manga_ocr_cache()
-    return utils.update_translation_ui(
+    ui_updates = utils.update_translation_ui(
         provider, ocr_method, use_custom_sampling, opencode_tier
     )
+
+    local_ocr_methods = ("manga-ocr", "paddleocr-vl-1.6")
+    if provider == "DeepL":
+        ocr_value = ocr_method if ocr_method in local_ocr_methods else "manga-ocr"
+        mode_update = gr.update(value="two-step", interactive=False)
+        ocr_update = gr.update(
+            value=ocr_value,
+            choices=list(local_ocr_methods),
+            interactive=True,
+        )
+    else:
+        mode_update = gr.update(interactive=True)
+        ocr_choices = ["LLM", "manga-ocr", "paddleocr-vl-1.6"]
+        ocr_interactive = translation_mode != "one-step"
+        ocr_update = gr.update(
+            choices=ocr_choices,
+            interactive=ocr_interactive,
+        )
+
+    return (*ui_updates, mode_update, ocr_update)
 
 
 def handle_opencode_tier_change(
@@ -2544,14 +2600,31 @@ def handle_ocr_method_change(
     return updates
 
 
-def handle_translation_mode_change(translation_mode: str, current_ocr_method: str):
+def handle_translation_mode_change(
+    translation_mode: str,
+    current_ocr_method: str,
+    provider: str = "",
+):
     """Handles changes in translation mode to enable/disable OCR method selection."""
     import gradio as gr
 
+    if provider == "DeepL":
+        ocr_value = (
+            current_ocr_method
+            if current_ocr_method in ("manga-ocr", "paddleocr-vl-1.6")
+            else "manga-ocr"
+        )
+        return (
+            gr.update(value="two-step", interactive=False),
+            gr.update(
+                value=ocr_value,
+                choices=["manga-ocr", "paddleocr-vl-1.6"],
+                interactive=True,
+            ),
+        )
+
     if translation_mode == "one-step":
         if current_ocr_method in ("manga-ocr", "paddleocr-vl-1.6"):
-            return gr.update(value="LLM", interactive=False)
-        else:
-            return gr.update(interactive=False)
-    else:
-        return gr.update(interactive=True)
+            return gr.update(), gr.update(value="LLM", interactive=False)
+        return gr.update(), gr.update(interactive=False)
+    return gr.update(), gr.update(interactive=True)
