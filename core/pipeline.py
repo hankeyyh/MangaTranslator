@@ -783,7 +783,7 @@ def translate_and_render(
     original_cv_image = pil_to_cv2(pil_image_processed)
     full_page_context_source = pil_image_processed.copy()
 
-    # Detect speech bubbles first so OSB processing can respect bubble regions
+    # 1. Detect speech bubbles first so OSB processing can respect bubble regions
     log_message("Detecting speech bubbles...", verbose=verbose)
     try:
         bubble_data, text_free_boxes = detect_speech_bubbles(
@@ -806,6 +806,7 @@ def translate_and_render(
         bubble_data = []
         text_free_boxes = []
 
+    # 2. 检查分镜，用于后续根据分镜+气泡顺序排序，保持翻译语境
     panels = None
     debug_panels = None
     if config.detection.use_panel_sorting or ENABLE_COMPONENT_ORDER_DEBUG:
@@ -840,7 +841,7 @@ def translate_and_render(
         if config.detection.use_panel_sorting:
             panels = debug_panels
 
-    # Process outside text (detect always; optionally defer inpainting for LLM overlap)
+    # 3. Process outside text (detect always; optionally defer inpainting for LLM overlap)
     use_llm_inpaint_overlap = _should_overlap_llm_with_inpaint(config)
     outside_work = None
     if use_llm_inpaint_overlap:
@@ -860,6 +861,7 @@ def translate_and_render(
         # Bubble/OSB LLM crops use the pre-inpaint page image
         original_cv_image = pil_to_cv2(pil_image_processed)
     else:
+        # detect, inpaint, ocr
         pil_image_processed, outside_text_data = process_outside_text(
             pil_image_processed,
             config,
@@ -962,6 +964,7 @@ def translate_and_render(
         if cancellation_manager and cancellation_manager.is_cancelled():
             raise CancellationError("Process cancelled by user.")
 
+        # 3. 清空气泡区域
         processed_bubbles_info: list[dict[str, Any]] = []
         pil_cleaned_image = pil_image_processed
         if not use_llm_inpaint_overlap:
@@ -1182,7 +1185,7 @@ def translate_and_render(
                         )
                         panels = None
 
-                # Sort all text elements (speech bubbles + OSB text) by reading order
+                # 4. Sort all text elements (speech bubbles + OSB text) by reading order
                 sorted_bubble_data = sort_bubbles_by_reading_order(
                     all_text_data, reading_direction, panels=panels
                 )
@@ -1249,7 +1252,7 @@ def translate_and_render(
                     if "image_b64" in bubble and "mime_type" in bubble
                 ]
                
-                # Translation
+                # 5. Translation
                 translated_texts = []
                 current_ocr_texts: list[str] = []
                 _provider_tag = f"[{config.translation.provider}:"
@@ -1498,7 +1501,7 @@ def translate_and_render(
                             verbose=verbose,
                         )
 
-                # Render Translations
+                # 6. Render Translations
                 bubble_render_info_map = {
                     tuple(info["bbox"]): {
                         "color": info["color"],
@@ -1601,7 +1604,7 @@ def translate_and_render(
             verbose=verbose,
         )
 
-    # Save Output
+    # 8. Save Output
     if output_path:
         if final_image_to_save.mode != target_mode:
             log_message(f"Converting final image to {target_mode}", verbose=verbose)
