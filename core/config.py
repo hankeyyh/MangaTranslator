@@ -134,8 +134,9 @@ class OutsideTextConfig:
     seed: int = 1  # -1 = random
     huggingface_token: str = ""  # Required for Flux Kontext model downloads
     inpainting_method: str = (
-        "flux_klein_4b"  # flux_klein_9b, flux_klein_4b, flux_kontext, opencv, none
+        "flux_klein_4b"  # flux_klein_9b, flux_klein_4b, flux_kontext, lama_large, opencv, none
     )
+    lama_inpainting_size: int = 2048
     flux_backend: str = "sdnq"  # "sdcpp", "sdnq", "nunchaku" (Kontext only)
     flux_low_vram: bool = False  # Use CPU offload for SDNQ
     flux_sdcpp_cache_mode: str = "none"

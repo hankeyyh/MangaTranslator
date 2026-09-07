@@ -94,7 +94,7 @@ def _clean_speech_bubbles_for_page(
         use_otsu = config.cleaning.use_otsu_threshold
         if config.cleaning.inpaint_colored_bubbles:
             log_message(
-                "Flux inpainting enabled for colored bubbles",
+                "Model inpainting enabled for colored bubbles",
                 verbose=verbose,
             )
 
@@ -125,6 +125,7 @@ def _clean_speech_bubbles_for_page(
             flux_sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
             flux_luminance_correction=config.outside_text.flux_luminance_correction,
             flux_upscale_small_crops=config.outside_text.flux_upscale_small_crops,
+            lama_inpainting_size=config.outside_text.lama_inpainting_size,
             bubble_detector_model=config.detection.bubble_detector_model,
             request_coordinator=getattr(config, "request_coordinator", None),
         )

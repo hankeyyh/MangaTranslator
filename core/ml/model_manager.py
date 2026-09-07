@@ -52,6 +52,7 @@ class ModelType(Enum):
     FLUX_KLEIN_SDCPP_VAE = "flux_klein_sdcpp_vae"
     FLUX_KONTEXT_SDCPP_CLIP_L = "flux_kontext_sdcpp_clip_l"
     FLUX_KONTEXT_SDCPP_VAE = "flux_kontext_sdcpp_vae"
+    LAMA_LARGE = "lama_large"
 
 
 class ModelManager:
@@ -142,6 +143,7 @@ class ModelManager:
             ModelType.FLUX_KONTEXT_SDCPP_VAE: (
                 flux_kontext_sdcpp_dir / "ae.safetensors"
             ),
+            ModelType.LAMA_LARGE: (model_dir / "lama" / "lama_large_512px.ckpt"),
         }
 
     def _init_model_urls(self):
@@ -166,6 +168,10 @@ class ModelManager:
             ModelType.FLUX_KONTEXT_SDCPP_VAE: (
                 "https://huggingface.co/Comfy-Org/Lumina_Image_2.0_Repackaged/resolve/main/"
                 "split_files/vae/ae.safetensors"
+            ),
+            ModelType.LAMA_LARGE: (
+                "https://huggingface.co/dreMaz/AnimeMangaInpainting/resolve/main/"
+                "lama_large_512px.ckpt"
             ),
         }
 
@@ -249,6 +255,10 @@ class ModelManager:
         repos[ModelType.FLUX_KONTEXT_SDCPP_VAE] = {
             "repo_id": "Comfy-Org/Lumina_Image_2.0_Repackaged",
             "filename": "split_files/vae/ae.safetensors",
+        }
+        repos[ModelType.LAMA_LARGE] = {
+            "repo_id": "dreMaz/AnimeMangaInpainting",
+            "filename": "lama_large_512px.ckpt",
         }
 
         return repos
@@ -1376,6 +1386,38 @@ class ModelManager:
             ModelType.FLUX_KLEIN_9B_PIPELINE, "9b", low_vram=low_vram, verbose=verbose
         )
 
+    def load_lama_large(self, verbose: bool = False):
+        """Load dreMaz AnimeMangaInpainting Big-LaMa large weights."""
+        with self._lock:
+            if self.is_loaded(ModelType.LAMA_LARGE):
+                return self.models[ModelType.LAMA_LARGE]
+
+            log_message(
+                "Loading LaMa Large (dreMaz/AnimeMangaInpainting)...",
+                verbose=verbose,
+            )
+            path = self.model_paths[ModelType.LAMA_LARGE]
+            try:
+                hf_info = self.model_hf_repos[ModelType.LAMA_LARGE]
+                self._ensure_hf_file(
+                    hf_info["repo_id"], hf_info["filename"], path, verbose=verbose
+                )
+            except Exception:
+                self._ensure_file(
+                    path, self.model_urls[ModelType.LAMA_LARGE], verbose=verbose
+                )
+
+            from core.ml.lama_arch import load_lama_large_generator
+
+            try:
+                model = load_lama_large_generator(path, self.device)
+            except Exception as e:
+                raise ModelError(f"Failed to load LaMa Large from {path}: {e}") from e
+
+            self.models[ModelType.LAMA_LARGE] = model
+            log_message("LaMa Large loaded.", verbose=verbose)
+            return model
+
     def load_flux_klein_4b(self, low_vram: bool = False, verbose: bool = False):
         """Load Flux.2 Klein 4B pipeline with FP8 transformer.
 
@@ -1502,6 +1544,12 @@ class ModelManager:
 
         if models_unloaded:
             log_message("Flux.2 Klein models unloaded.", verbose=verbose)
+
+    def unload_lama_large(self, verbose: bool = False):
+        """Unload LaMa Large inpainting model."""
+        if self.is_loaded(ModelType.LAMA_LARGE):
+            self.unload_model(ModelType.LAMA_LARGE, force_gc=True, verbose=verbose)
+            log_message("LaMa Large unloaded.", verbose=verbose)
 
     def unload_all(self, verbose: bool = False):
         """Unload all models and free all GPU memory."""

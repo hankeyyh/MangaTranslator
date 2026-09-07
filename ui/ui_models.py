@@ -133,8 +133,9 @@ class UIOutsideTextSettings:
     seed: int = 1  # -1 = random
     huggingface_token: str = ""
     inpainting_method: str = (
-        "flux_klein_4b"  # flux_klein_9b, flux_klein_4b, flux_kontext, opencv, none
+        "flux_klein_4b"  # flux_klein_9b, flux_klein_4b, flux_kontext, lama_large, opencv, none
     )
+    lama_inpainting_size: int = 2048
     flux_backend: str = "sdnq"  # "sdcpp", "sdnq", "nunchaku" (Kontext only)
     flux_low_vram: bool = False  # Use CPU offload for SDNQ
     flux_sdcpp_cache_mode: str = "none"
@@ -318,6 +319,7 @@ class UIConfigState:
             "outside_text_flux_upscale_small_crops": self.outside_text.flux_upscale_small_crops,
             "outside_text_flux_group_regions": self.outside_text.flux_group_regions,
             "outside_text_flux_residual_diff_threshold": self.outside_text.flux_residual_diff_threshold,
+            "outside_text_lama_inpainting_size": self.outside_text.lama_inpainting_size,
             "outside_text_osb_confidence": self.outside_text.osb_confidence,
             "outside_text_osb_text_free_only": self.outside_text.osb_text_free_only,
             "outside_text_enable_page_number_filtering": self.outside_text.enable_page_number_filtering,
@@ -502,6 +504,12 @@ class UIConfigState:
                 flux_group_regions=data.get("outside_text_flux_group_regions", False),
                 flux_residual_diff_threshold=data.get(
                     "outside_text_flux_residual_diff_threshold", 0.15
+                ),
+                lama_inpainting_size=int(
+                    data.get(
+                        "outside_text_lama_inpainting_size",
+                        defaults.get("outside_text_lama_inpainting_size", 2048),
+                    )
                 ),
                 osb_confidence=data.get("outside_text_osb_confidence", 0.5),
                 osb_text_free_only=data.get("outside_text_osb_text_free_only", False),
@@ -908,6 +916,7 @@ def map_ui_to_backend_config(
         flux_upscale_small_crops=ui_state.outside_text.flux_upscale_small_crops,
         flux_group_regions=ui_state.outside_text.flux_group_regions,
         flux_residual_diff_threshold=ui_state.outside_text.flux_residual_diff_threshold,
+        lama_inpainting_size=ui_state.outside_text.lama_inpainting_size,
         osb_confidence=ui_state.outside_text.osb_confidence,
         osb_text_free_only=ui_state.outside_text.osb_text_free_only,
         osb_font_dir=str(osb_font_path) if osb_font_path else None,

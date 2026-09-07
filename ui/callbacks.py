@@ -186,6 +186,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
         outside_text_flux_upscale_small_crops_val,
         outside_text_flux_group_regions_val,
         outside_text_flux_residual_diff_threshold_val,
+        outside_text_lama_inpainting_size_val,
         outside_text_osb_confidence_val,
         outside_text_osb_text_free_only_val,
         outside_text_min_area_ignore_ratio_percent_val,
@@ -274,6 +275,7 @@ def _build_ui_state_from_args(args: tuple, is_batch: bool) -> UIConfigState:
             flux_residual_diff_threshold=float(
                 outside_text_flux_residual_diff_threshold_val
             ),
+            lama_inpainting_size=int(outside_text_lama_inpainting_size_val),
             osb_confidence=float(outside_text_osb_confidence_val),
             osb_text_free_only=bool(outside_text_osb_text_free_only_val),
             min_area_ignore_ratio=float(outside_text_min_area_ignore_ratio_percent_val)
@@ -1146,6 +1148,7 @@ def handle_save_config_click(*args: Any) -> str:
         outside_text_flux_upscale_small_crops_val,
         outside_text_flux_group_regions_val,
         outside_text_flux_residual_diff_threshold_val,
+        outside_text_lama_inpainting_size_val,
         outside_text_osb_confidence_val,
         outside_text_osb_text_free_only_val,
         outside_text_min_area_ignore_ratio_percent_val,
@@ -1218,6 +1221,7 @@ def handle_save_config_click(*args: Any) -> str:
             flux_residual_diff_threshold=float(
                 outside_text_flux_residual_diff_threshold_val
             ),
+            lama_inpainting_size=int(outside_text_lama_inpainting_size_val),
             osb_confidence=float(outside_text_osb_confidence_val),
             osb_text_free_only=bool(outside_text_osb_text_free_only_val),
             min_area_ignore_ratio=float(outside_text_min_area_ignore_ratio_percent_val)
@@ -1691,6 +1695,7 @@ def handle_reset_defaults_click(fonts_base_dir: Path) -> list[gr.update]:
         default_ui_state.outside_text.flux_upscale_small_crops,
         default_ui_state.outside_text.flux_group_regions,
         default_ui_state.outside_text.flux_residual_diff_threshold,
+        default_ui_state.outside_text.lama_inpainting_size,
         default_ui_state.outside_text.osb_confidence,
         default_ui_state.outside_text.osb_text_free_only,
         default_ui_state.outside_text.min_area_ignore_ratio * 100.0,

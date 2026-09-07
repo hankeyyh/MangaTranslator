@@ -29,6 +29,24 @@ FLUX_GUIDANCE_SCALE = 2.5  # Flux Kontext guidance scale
 CONTEXT_PADDING_RATIO = 0.5  # Context padding is 50% of detection size
 MAX_CONTEXT_PADDING = 80  # Context padding capped at 80 pixels
 
+FLUX_INPAINTING_METHODS = frozenset(
+    {"flux_klein_9b", "flux_klein_4b", "flux_kontext"}
+)
+LAMA_INPAINTING_METHODS = frozenset({"lama_large"})
+FILL_INPAINTING_METHODS = frozenset({"opencv", "none"})
+
+
+def is_flux_inpainting_method(method: str) -> bool:
+    return method in FLUX_INPAINTING_METHODS
+
+
+def is_lama_inpainting_method(method: str) -> bool:
+    return method in LAMA_INPAINTING_METHODS
+
+
+def is_model_inpainting_method(method: str) -> bool:
+    return method in FLUX_INPAINTING_METHODS or method in LAMA_INPAINTING_METHODS
+
 
 def _prompt_value_to_cpu(value):
     if isinstance(value, torch.Tensor):
@@ -1674,3 +1692,276 @@ class FluxKleinInpainter:
             self.cache.set_inpainted_image(cache_key, patch_pil)
 
         return composited_pil
+
+
+class LamaLargeInpainter:
+    """Inpainter using dreMaz AnimeMangaInpainting (Big-LaMa large)."""
+
+    PAD_MOD = 8
+    DEFAULT_INPAINTING_SIZE = 2048
+
+    def __init__(
+        self,
+        device: torch.device | None = None,
+        inpainting_size: int = DEFAULT_INPAINTING_SIZE,
+        verbose: bool = False,
+    ):
+        self.DEVICE = device if device is not None else get_best_device()
+        self.inpainting_size = max(64, int(inpainting_size))
+        self.verbose = verbose
+        self.manager = get_model_manager()
+        self.cache = get_cache()
+        self.model = None
+
+    def load_models(self):
+        if self.model is None:
+            self.model = self.manager.load_lama_large(verbose=self.verbose)
+
+    def unload_models(self):
+        self.model = None
+        self.manager.unload_lama_large(verbose=self.verbose)
+
+    def inpaint_mask(
+        self,
+        image_pil: Image.Image,
+        mask_np: np.ndarray,
+        seed: int = 1,
+        verbose: bool = False,
+        strict_mask_clipping: bool = False,
+        composite_clip_bbox: tuple[int, int, int, int] | None = None,
+        ocr_params: dict | None = None,
+    ) -> Image.Image:
+        mask_np = np.asarray(mask_np)
+        if mask_np.dtype != bool:
+            mask_np = mask_np > 0
+        if not np.any(mask_np):
+            return image_pil
+
+        ys, xs = np.where(mask_np)
+        if len(ys) == 0 or len(xs) == 0:
+            return image_pil
+
+        img_w, img_h = image_pil.size
+        x_min, x_max = int(xs.min()), int(xs.max())
+        y_min, y_max = int(ys.min()), int(ys.max())
+        bbox_w = x_max - x_min + 1
+        bbox_h = y_max - y_min + 1
+        padding = min(
+            int(max(bbox_w, bbox_h) * CONTEXT_PADDING_RATIO),
+            MAX_CONTEXT_PADDING,
+        )
+        x1 = max(0, x_min - padding)
+        y1 = max(0, y_min - padding)
+        x2 = min(img_w, x_max + 1 + padding)
+        y2 = min(img_h, y_max + 1 + padding)
+        if x2 <= x1 or y2 <= y1:
+            return image_pil
+
+        log_message(
+            f"  - LaMa Large inpainting region ({x1}, {y1}) size {x2 - x1}x{y2 - y1}",
+            verbose=verbose,
+        )
+
+        image_crop = image_pil.convert("RGB").crop((x1, y1, x2, y2))
+        mask_crop = mask_np[y1:y2, x1:x2]
+        composite_mask = mask_crop.astype(np.float32)
+        if composite_clip_bbox is not None:
+            clip_x1, clip_y1, clip_x2, clip_y2 = composite_clip_bbox
+            clipped = np.zeros_like(composite_mask)
+            sx1 = max(0, clip_x1 - x1)
+            sy1 = max(0, clip_y1 - y1)
+            sx2 = min(composite_mask.shape[1], clip_x2 - x1)
+            sy2 = min(composite_mask.shape[0], clip_y2 - y1)
+            if sx2 > sx1 and sy2 > sy1:
+                clipped[sy1:sy2, sx1:sx2] = composite_mask[sy1:sy2, sx1:sx2]
+            composite_mask = clipped
+        if not np.any(composite_mask > 0):
+            return image_pil
+
+        cache_params = {
+            "method": "lama_large",
+            "bbox": (x1, y1, x2, y2),
+            "inpainting_size": self.inpainting_size,
+            "strict_clip": bool(strict_mask_clipping),
+        }
+        if composite_clip_bbox is not None:
+            cache_params["clip_bbox"] = tuple(composite_clip_bbox)
+        if ocr_params:
+            cache_params.update(ocr_params)
+
+        cache_key = None
+        cached_patch = None
+        if self.cache.should_use_inpaint_cache(seed):
+            cache_key = self.cache.get_inpaint_cache_key(
+                image_crop,
+                (composite_mask > 0.5).astype(np.uint8),
+                seed,
+                1,
+                0.0,
+                0.0,
+                "lama_large",
+                cache_params,
+            )
+            cached_patch = self.cache.get_inpainted_image(cache_key)
+            if cached_patch is not None:
+                log_message("  - Using cached LaMa patch", verbose=verbose)
+
+        if cached_patch is None:
+            cached_patch = self._run_lama(image_crop, mask_crop, verbose=verbose)
+            if self.cache.should_use_inpaint_cache(seed) and cache_key is not None:
+                self.cache.set_inpainted_image(cache_key, cached_patch)
+
+        result = image_pil.convert("RGB").copy()
+        src = np.asarray(cached_patch, dtype=np.float32)
+        dest = np.asarray(result, dtype=np.float32)
+        alpha = composite_mask[..., None]
+        dest[y1:y2, x1:x2] = src * alpha + dest[y1:y2, x1:x2] * (1.0 - alpha)
+        return Image.fromarray(np.clip(dest, 0, 255).astype(np.uint8))
+
+    def _resize_keep_aspect(
+        self, image: np.ndarray, mask: np.ndarray, max_side: int
+    ) -> tuple[np.ndarray, np.ndarray]:
+        height, width = image.shape[:2]
+        longest = max(height, width)
+        if longest <= max_side:
+            return image, mask
+        scale = max_side / float(longest)
+        new_w = max(1, round(width * scale))
+        new_h = max(1, round(height * scale))
+        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        return image, mask
+
+    def _pad_to_mod(
+        self, image: np.ndarray, mask: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray]:
+        height, width = image.shape[:2]
+        new_h = (
+            height
+            if height % self.PAD_MOD == 0
+            else height + (self.PAD_MOD - height % self.PAD_MOD)
+        )
+        new_w = (
+            width
+            if width % self.PAD_MOD == 0
+            else width + (self.PAD_MOD - width % self.PAD_MOD)
+        )
+        if new_h == height and new_w == width:
+            return image, mask
+        image = cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        mask = cv2.resize(mask, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+        return image, mask
+
+    def _run_lama(
+        self, image_crop: Image.Image, mask_crop: np.ndarray, verbose: bool = False
+    ) -> Image.Image:
+        image_np = np.asarray(image_crop.convert("RGB"))
+        mask_np = (mask_crop.astype(np.float32) > 0).astype(np.uint8) * 255
+        orig_h, orig_w = image_np.shape[:2]
+        image_np, mask_np = self._resize_keep_aspect(
+            image_np, mask_np, self.inpainting_size
+        )
+        image_np, mask_np = self._pad_to_mod(image_np, mask_np)
+
+        img_torch = (
+            torch.from_numpy(image_np).permute(2, 0, 1).unsqueeze(0).float() / 255.0
+        )
+        mask_torch = torch.from_numpy(mask_np).unsqueeze(0).unsqueeze(0).float() / 255.0
+        mask_torch = (mask_torch >= 0.5).float()
+        img_torch = img_torch * (1.0 - mask_torch)
+
+        self.load_models()
+        if self.model is None:
+            raise ModelError("LaMa Large model is unavailable")
+
+        log_message(
+            f"  - LaMa inference at {image_np.shape[1]}x{image_np.shape[0]}",
+            verbose=verbose,
+        )
+        device = next(self.model.parameters()).device
+        img_torch = img_torch.to(device)
+        mask_torch = mask_torch.to(device)
+
+        with torch.inference_mode():
+            if device.type == "cuda":
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    out = self.model(img_torch, mask_torch)
+            else:
+                out = self.model(img_torch, mask_torch)
+
+        out = out.float().cpu().squeeze(0).permute(1, 2, 0).numpy()
+        out = np.clip(out * 255.0, 0, 255).astype(np.uint8)
+        if out.shape[0] != orig_h or out.shape[1] != orig_w:
+            out = cv2.resize(out, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+        return Image.fromarray(out)
+
+
+def create_inpainter(
+    method: str,
+    *,
+    device: torch.device | None = None,
+    huggingface_token: str = "",
+    flux_backend: str = "sdnq",
+    flux_low_vram: bool = False,
+    flux_num_inference_steps: int = 8,
+    flux_residual_diff_threshold: float = 0.15,
+    flux_luminance_correction: bool = True,
+    flux_upscale_small_crops: bool = True,
+    flux_sdcpp_cache_mode: str = "none",
+    flux_sdcpp_diffusion_quant: str = "Q4_K_M",
+    flux_sdcpp_text_encoder_quant: str = "",
+    lama_inpainting_size: int = 2048,
+    verbose: bool = False,
+):
+    """Construct the OSB/bubble inpainter for the selected method."""
+    if method in FILL_INPAINTING_METHODS or not method:
+        return None
+    if method == "lama_large":
+        return LamaLargeInpainter(
+            device=device,
+            inpainting_size=lama_inpainting_size,
+            verbose=verbose,
+        )
+    if method == "flux_klein_9b":
+        return FluxKleinInpainter(
+            variant="9b",
+            device=device,
+            huggingface_token=huggingface_token,
+            num_inference_steps=flux_num_inference_steps,
+            low_vram=flux_low_vram,
+            luminance_correction=flux_luminance_correction,
+            upscale_small_crops=flux_upscale_small_crops,
+            backend=flux_backend,
+            sdcpp_cache_mode=flux_sdcpp_cache_mode,
+            sdcpp_diffusion_quant=flux_sdcpp_diffusion_quant,
+            sdcpp_text_encoder_quant=flux_sdcpp_text_encoder_quant,
+            verbose=verbose,
+        )
+    if method == "flux_klein_4b":
+        return FluxKleinInpainter(
+            variant="4b",
+            device=device,
+            huggingface_token=huggingface_token,
+            num_inference_steps=flux_num_inference_steps,
+            low_vram=flux_low_vram,
+            luminance_correction=flux_luminance_correction,
+            upscale_small_crops=flux_upscale_small_crops,
+            backend=flux_backend,
+            sdcpp_cache_mode=flux_sdcpp_cache_mode,
+            sdcpp_diffusion_quant=flux_sdcpp_diffusion_quant,
+            sdcpp_text_encoder_quant=flux_sdcpp_text_encoder_quant,
+            verbose=verbose,
+        )
+
+    low_vram = flux_low_vram if flux_backend == "sdnq" else False
+    return FluxKontextInpainter(
+        device=device,
+        huggingface_token=huggingface_token,
+        num_inference_steps=flux_num_inference_steps,
+        residual_diff_threshold=flux_residual_diff_threshold,
+        backend=flux_backend,
+        low_vram=low_vram,
+        sdcpp_cache_mode=flux_sdcpp_cache_mode,
+        sdcpp_diffusion_quant=flux_sdcpp_diffusion_quant,
+        sdcpp_text_encoder_quant=flux_sdcpp_text_encoder_quant,
+    )

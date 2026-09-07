@@ -700,9 +700,22 @@ def main():
     parser.add_argument(
         "--osb-inpainting-method",
         type=str,
-        choices=["flux_klein_9b", "flux_klein_4b", "flux_kontext", "opencv", "none"],
+        choices=[
+            "flux_klein_9b",
+            "flux_klein_4b",
+            "flux_kontext",
+            "lama_large",
+            "opencv",
+            "none",
+        ],
         default="flux_klein_4b",
         help="Inpainting method for outside text removal.",
+    )
+    parser.add_argument(
+        "--osb-lama-inpainting-size",
+        type=int,
+        default=2048,
+        help="Max side length for LaMa Large inpainting before downscale.",
     )
     parser.add_argument(
         "--osb-flux-backend",
@@ -993,7 +1006,12 @@ def main():
             "--osb-flux-backend nunchaku is only supported with "
             "--osb-inpainting-method flux_kontext."
         )
-    if args.osb_flux_backend == "sdcpp" and args.osb_flux_sdcpp_text_encoder_quant:
+    if (
+        args.osb_flux_backend == "sdcpp"
+        and args.osb_flux_sdcpp_text_encoder_quant
+        and args.osb_inpainting_method
+        in ("flux_klein_9b", "flux_klein_4b", "flux_kontext")
+    ):
         valid_text_encoder_quants = flux_sdcpp_text_encoder_quants(
             args.osb_inpainting_method
         )
@@ -1367,6 +1385,7 @@ def main():
             flux_upscale_small_crops=args.osb_flux_upscale_small_crops,
             flux_group_regions=args.osb_flux_group_regions,
             flux_residual_diff_threshold=args.osb_flux_residual_threshold,
+            lama_inpainting_size=args.osb_lama_inpainting_size,
             osb_confidence=args.osb_confidence,
             osb_text_free_only=args.osb_text_free_only,
             seed=args.osb_seed,

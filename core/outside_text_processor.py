@@ -20,7 +20,7 @@ from core.batch_coordinator import (
 )
 from core.config import MangaTranslatorConfig
 from core.image.image_utils import cv2_to_pil, pil_to_cv2, process_bubble_image_cached
-from core.image.inpainting import FluxKleinInpainter, FluxKontextInpainter
+from core.image.inpainting import create_inpainter
 from core.image.ocr_detection import OutsideTextDetector, extract_text_with_manga_ocr
 from core.ml.model_manager import get_model_manager
 from utils.logging import log_message
@@ -661,103 +661,43 @@ def finish_outside_text_work(
         # Create inpainter based on selected method
         inpainting_method = config.outside_text.inpainting_method
         inpainter = None
-        if inpainting_method == "flux_klein_9b":
-            try:
-                backend = config.outside_text.flux_backend
-                inpainter = FluxKleinInpainter(
-                    variant="9b",
-                    device=config.device,
-                    huggingface_token=config.outside_text.huggingface_token,
-                    num_inference_steps=config.outside_text.flux_num_inference_steps,
-                    low_vram=config.outside_text.flux_low_vram,
-                    luminance_correction=config.outside_text.flux_luminance_correction,
-                    upscale_small_crops=config.outside_text.flux_upscale_small_crops,
-                    backend=backend,
-                    sdcpp_cache_mode=config.outside_text.flux_sdcpp_cache_mode,
-                    sdcpp_diffusion_quant=config.outside_text.flux_sdcpp_diffusion_quant,
-                    sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
-                    verbose=verbose,
-                )
-                backend_label = "sd.cpp" if backend == "sdcpp" else "SDNQ"
-                log_message(
-                    f"Using Flux.2 Klein 9B ({backend_label}) for inpainting",
-                    verbose=verbose,
-                )
-            except Exception as e:
-                log_message(
-                    f"Flux Klein 9B unavailable ({e}), falling back to OpenCV",
-                    verbose=verbose,
-                )
-
-        if inpainting_method == "flux_klein_4b":
-            try:
-                backend = config.outside_text.flux_backend
-                inpainter = FluxKleinInpainter(
-                    variant="4b",
-                    device=config.device,
-                    huggingface_token=config.outside_text.huggingface_token,
-                    num_inference_steps=config.outside_text.flux_num_inference_steps,
-                    low_vram=config.outside_text.flux_low_vram,
-                    luminance_correction=config.outside_text.flux_luminance_correction,
-                    upscale_small_crops=config.outside_text.flux_upscale_small_crops,
-                    backend=backend,
-                    sdcpp_cache_mode=config.outside_text.flux_sdcpp_cache_mode,
-                    sdcpp_diffusion_quant=config.outside_text.flux_sdcpp_diffusion_quant,
-                    sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
-                    verbose=verbose,
-                )
-                backend_label = "sd.cpp" if backend == "sdcpp" else "SDNQ"
-                log_message(
-                    f"Using Flux.2 Klein 4B ({backend_label}) for inpainting",
-                    verbose=verbose,
-                )
-            except Exception as e:
-                log_message(
-                    f"Flux Klein 4B unavailable ({e}), falling back to OpenCV",
-                    verbose=verbose,
-                )
-
-        if inpainting_method == "flux_kontext":
-            try:
-                backend = config.outside_text.flux_backend
-                low_vram = (
-                    config.outside_text.flux_low_vram if backend == "sdnq" else False
-                )
-                inpainter = FluxKontextInpainter(
-                    device=config.device,
-                    huggingface_token=config.outside_text.huggingface_token,
-                    num_inference_steps=config.outside_text.flux_num_inference_steps,
-                    residual_diff_threshold=config.outside_text.flux_residual_diff_threshold,
-                    backend=backend,
-                    low_vram=low_vram,
-                    sdcpp_cache_mode=config.outside_text.flux_sdcpp_cache_mode,
-                    sdcpp_diffusion_quant=config.outside_text.flux_sdcpp_diffusion_quant,
-                    sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
-                )
-                backend_label = {
-                    "sdnq": "SDNQ",
-                    "sdcpp": "sd.cpp",
-                    "nunchaku": "Nunchaku",
-                }[backend]
-                log_message(
-                    f"Using Flux.1 Kontext ({backend_label}) for inpainting",
-                    verbose=verbose,
-                )
-            except Exception as e:
-                log_message(
-                    f"Flux Kontext unavailable ({e}), falling back to OpenCV",
-                    verbose=verbose,
-                )
-
         if inpainting_method == "none":
-            inpainter = None
             log_message(
                 "Using text background mode (no inpainting for non-solid regions)",
                 verbose=verbose,
             )
-        elif inpainting_method == "opencv" or inpainter is None:
-            inpainter = None
+        elif inpainting_method == "opencv":
             log_message("Using OpenCV simple fill for inpainting", verbose=verbose)
+        else:
+            try:
+                inpainter = create_inpainter(
+                    inpainting_method,
+                    device=config.device,
+                    huggingface_token=config.outside_text.huggingface_token,
+                    flux_backend=config.outside_text.flux_backend,
+                    flux_low_vram=config.outside_text.flux_low_vram,
+                    flux_num_inference_steps=config.outside_text.flux_num_inference_steps,
+                    flux_residual_diff_threshold=config.outside_text.flux_residual_diff_threshold,
+                    flux_luminance_correction=config.outside_text.flux_luminance_correction,
+                    flux_upscale_small_crops=config.outside_text.flux_upscale_small_crops,
+                    flux_sdcpp_cache_mode=config.outside_text.flux_sdcpp_cache_mode,
+                    flux_sdcpp_diffusion_quant=config.outside_text.flux_sdcpp_diffusion_quant,
+                    flux_sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
+                    lama_inpainting_size=config.outside_text.lama_inpainting_size,
+                    verbose=verbose,
+                )
+                log_message(
+                    f"Using {inpainting_method} for inpainting",
+                    verbose=verbose,
+                )
+            except Exception as e:
+                inpainter = None
+                log_message(
+                    f"Inpainter unavailable ({e}), falling back to OpenCV",
+                    verbose=verbose,
+                )
+            if inpainter is None:
+                log_message("Using OpenCV simple fill for inpainting", verbose=verbose)
         current_image = pil_image
         temp_files = []
         none_skipped_clip_bboxes = set()
@@ -901,7 +841,7 @@ def finish_outside_text_work(
                                     )
                                     if result_image is image_for_job:
                                         raise RuntimeError(
-                                            "Flux returned original image (no inpaint)"
+                                            "Inpainter returned original image (no inpaint)"
                                         )
                                     return {
                                         "candidate": candidate,
@@ -925,8 +865,8 @@ def finish_outside_text_work(
                             if result["error"] is not None:
                                 fallback_color_to_use = candidate["fallback_color"]
                                 log_message(
-                                    f"Flux failed for OSB region {candidate['index']}"
-                                    f" (Flux inpainting error: {result['error']}); "
+                                    f"Inpainting failed for OSB region {candidate['index']}"
+                                    f" (inpainting error: {result['error']}); "
                                     f"falling back to CV2 fill ({fallback_color_to_use})",
                                     always_print=True,
                                 )
@@ -1534,7 +1474,7 @@ def finish_outside_text_work(
 
                     if inpainter is None:
                         flux_failed = True
-                        flux_fail_reason = "Flux inpainter unavailable"
+                        flux_fail_reason = "Inpainter unavailable"
                     else:
                         try:
                             inpainted_image = inpainter.inpaint_mask(
@@ -1548,11 +1488,11 @@ def finish_outside_text_work(
                             if inpainted_image is current_image:
                                 flux_failed = True
                                 flux_fail_reason = (
-                                    "Flux returned original image (no inpaint)"
+                                    "Inpainter returned original image (no inpaint)"
                                 )
                         except Exception as e:
                             flux_failed = True
-                            flux_fail_reason = f"Flux inpainting error: {e}"
+                            flux_fail_reason = f"Inpainting error: {e}"
 
                     if flux_failed:
                         fallback_color_to_use = (
@@ -1561,7 +1501,7 @@ def finish_outside_text_work(
                             else (255, 255, 255)
                         )
                         log_message(
-                            f"Flux failed for OSB region {i + 1}"
+                            f"Inpainting failed for OSB region {i + 1}"
                             + (f" ({flux_fail_reason})" if flux_fail_reason else "")
                             + f"; falling back to CV2 fill ({fallback_color_to_use})",
                             always_print=True,
@@ -1642,13 +1582,13 @@ def finish_outside_text_work(
                                 )
                             if inpainted_image is current_image:
                                 raise RuntimeError(
-                                    "Flux returned original image (no inpaint)"
+                                    "Inpainter returned original image (no inpaint)"
                                 )
                             current_image = inpainted_image
                             flux_inpaints += len(grouped_flux_candidates)
                         except Exception as e:
                             log_message(
-                                "Grouped Flux inpainting failed "
+                                "Grouped inpainting failed "
                                 f"({e}); falling back to CV2 fill",
                                 always_print=True,
                             )

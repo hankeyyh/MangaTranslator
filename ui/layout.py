@@ -1668,13 +1668,15 @@ def create_layout(
                                         ("Flux.2 Klein 9B", "flux_klein_9b"),
                                         ("Flux.2 Klein 4B", "flux_klein_4b"),
                                         ("Flux.1 Kontext (12B)", "flux_kontext"),
+                                        ("LaMa Large (manga)", "lama_large"),
                                         ("OpenCV", "opencv"),
                                         ("None (text background)", "none"),
                                     ],
                                     label="Inpainting Method",
                                     info=(
                                         "Klein models are newer, but may introduce minor color "
-                                        "shifts. Kontext does not shift colors, but is more dated."
+                                        "shifts. Kontext does not shift colors, but is more dated. "
+                                        "LaMa Large is a fast manga-tuned erase model."
                                     ),
                                 )
                                 _initial_method = saved_settings.get(
@@ -1685,6 +1687,7 @@ def create_layout(
                                     "flux_klein_9b",
                                     "flux_klein_4b",
                                 )
+                                _is_lama = _initial_method == "lama_large"
                                 _backend_visible = _is_klein_model or _is_kontext
                                 _initial_backend = flux_valid_backend(
                                     _initial_method,
@@ -1858,6 +1861,10 @@ def create_layout(
                                 _is_flux_for_klein_options = saved_settings.get(
                                     "outside_text_inpainting_method",
                                     "flux_klein_4b",
+                                ) not in ("opencv", "none", "lama_large")
+                                _is_model_for_group = saved_settings.get(
+                                    "outside_text_inpainting_method",
+                                    "flux_klein_4b",
                                 ) not in ("opencv", "none")
                                 _upscale_small_crops_enabled = saved_settings.get(
                                     "outside_text_flux_upscale_small_crops", True
@@ -1911,16 +1918,27 @@ def create_layout(
                                     value=saved_settings.get(
                                         "outside_text_flux_group_regions", False
                                     ),
-                                    label="Group Flux Regions",
+                                    label="Group Inpaint Regions",
                                     info=(
-                                        "Run one Flux pass over a combined expanded mask for all non-solid OSB regions."
+                                        "Run one inpaint pass over a combined expanded mask for all non-solid OSB regions."
                                     ),
-                                    visible=_is_flux_for_klein_options,
-                                    interactive=saved_settings.get(
-                                        "outside_text_inpainting_method",
-                                        "flux_klein_4b",
-                                    )
-                                    not in ("opencv", "none"),
+                                    visible=_is_model_for_group,
+                                    interactive=_is_model_for_group,
+                                )
+                                outside_text_lama_inpainting_size = gr.Slider(
+                                    512,
+                                    4096,
+                                    value=saved_settings.get(
+                                        "outside_text_lama_inpainting_size", 2048
+                                    ),
+                                    step=64,
+                                    label="LaMa Inpainting Size",
+                                    info=(
+                                        "Max side length sent to LaMa Large. "
+                                        "Larger values keep more detail but use more memory."
+                                    ),
+                                    visible=_is_lama,
+                                    interactive=_is_lama,
                                 )
                                 outside_text_seed = gr.Number(
                                     value=saved_settings.get("outside_text_seed", 1),
@@ -1938,17 +1956,13 @@ def create_layout(
                                     value=saved_settings.get(
                                         "inpaint_colored_bubbles", False
                                     ),
-                                    label="Use Flux to Inpaint Colored Bubbles",
+                                    label="Inpaint Colored Bubbles",
                                     info=(
-                                        "Use Flux for bubble cleaning when the interior is not pure white/black "
-                                        "(e.g., colored/grayscale)."
+                                        "Use the selected inpainting model when the bubble interior "
+                                        "is not pure white/black (e.g., colored/grayscale)."
                                     ),
-                                    visible=_backend_visible,
-                                    interactive=saved_settings.get(
-                                        "outside_text_inpainting_method",
-                                        "flux_klein_4b",
-                                    )
-                                    not in ("opencv", "none"),
+                                    visible=_is_model_for_group,
+                                    interactive=_is_model_for_group,
                                 )
 
                                 gr.Markdown("### Font Rendering")
@@ -2381,6 +2395,7 @@ def create_layout(
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_lama_inpainting_size,
             outside_text_osb_confidence,
             outside_text_osb_text_free_only,
             outside_text_min_area_ignore_ratio_percent,
@@ -2518,6 +2533,7 @@ def create_layout(
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_lama_inpainting_size,
             outside_text_osb_confidence,
             outside_text_osb_text_free_only,
             outside_text_min_area_ignore_ratio_percent,
@@ -2650,6 +2666,7 @@ def create_layout(
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_lama_inpainting_size,
             outside_text_osb_confidence,
             outside_text_osb_text_free_only,
             outside_text_min_area_ignore_ratio_percent,
@@ -2788,6 +2805,7 @@ def create_layout(
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_lama_inpainting_size,
             outside_text_osb_confidence,
             outside_text_osb_text_free_only,
             outside_text_min_area_ignore_ratio_percent,
@@ -3189,11 +3207,11 @@ def create_layout(
             group_regions: bool,
         ):
             """Update controls based on inpainting method selection."""
-            is_opencv = method == "opencv"
-            is_none = method == "none"
-            is_no_flux = is_opencv or is_none
+            is_lama = method == "lama_large"
             is_kontext = method == "flux_kontext"
             is_klein = method in ("flux_klein_9b", "flux_klein_4b")
+            is_flux = is_klein or is_kontext
+            is_model = is_flux or is_lama
 
             if is_kontext:
                 max_steps = 30
@@ -3202,15 +3220,15 @@ def create_layout(
                 max_steps = 12
                 default_steps = 4
 
-            if is_klein or is_kontext:
+            if is_flux:
                 backend_value = flux_valid_backend(method, current_backend)
                 backend_visible = True
             else:
                 backend_value = flux_valid_backend(method, current_backend)
                 backend_visible = False
 
-            show_low_vram = (is_klein or is_kontext) and backend_value == "sdnq"
-            show_sdcpp_cache = (is_klein or is_kontext) and backend_value == "sdcpp"
+            show_low_vram = is_flux and backend_value == "sdnq"
+            show_sdcpp_cache = is_flux and backend_value == "sdcpp"
             available_text_encoder_quants = flux_sdcpp_text_encoder_quants(method)
             text_encoder_quants = (
                 available_text_encoder_quants
@@ -3258,25 +3276,29 @@ def create_layout(
                 ),
                 text_encoder_quant_value,
                 gr.update(
-                    visible=(not is_no_flux),
-                    interactive=(not is_no_flux),
+                    visible=is_flux,
+                    interactive=is_flux,
                     maximum=max_steps,
                     value=default_steps,
                 ),
                 luminance_update,
-                gr.update(visible=(not is_no_flux), interactive=is_klein),
-                gr.update(visible=(not is_no_flux), interactive=(not is_no_flux)),
+                gr.update(visible=is_flux, interactive=is_klein),
+                gr.update(visible=is_model, interactive=is_model),
                 gr.update(
                     visible=residual_interactive,
                     interactive=residual_interactive,
                 ),
                 gr.update(
-                    visible=(not is_no_flux),
-                    interactive=(not is_no_flux),
+                    visible=is_flux,
+                    interactive=is_flux,
                 ),
                 gr.update(
-                    visible=(not is_no_flux),
-                    interactive=(not is_no_flux),
+                    visible=is_model,
+                    interactive=is_model,
+                ),
+                gr.update(
+                    visible=is_lama,
+                    interactive=is_lama,
                 ),
             )
 
@@ -3307,6 +3329,7 @@ def create_layout(
                 outside_text_flux_residual_diff_threshold,
                 outside_text_seed,
                 inpaint_colored_bubbles,
+                outside_text_lama_inpainting_size,
             ],
             queue=False,
         )
