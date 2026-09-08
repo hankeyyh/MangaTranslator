@@ -671,6 +671,25 @@ def translate_and_render(
 
     Returns:
         PIL.Image: Final translated image
+
+    核心流程:
+    检测
+        - YOLO 气泡 box 检测
+        - RT-DETR-v2 气泡外文本 (text_free) box 检测
+    确定分镜顺序
+        - 供后续阅读顺序与翻译语境使用
+        - 输出: list[tuple[int, int, int, int]]
+    处理 OSB 文本（气泡外）
+        - OCR 识别原文
+        - inpaint 擦除原文（默认 lama_large)
+    清空气泡区域
+        - 纯色填充，为渲染译文腾出空白
+    翻译文本排序
+        - 分镜顺序 + 气泡阅读顺序，保持语境
+    LLM 翻译
+        - 按排序后的气泡/OSB 批量翻译
+    渲染
+        - 将译文写回已清空的气泡 / OSB 区域
     """
     start_time = time.time()
     validate_config(config)
@@ -863,7 +882,7 @@ def translate_and_render(
         # Bubble/OSB LLM crops use the pre-inpaint page image
         original_cv_image = pil_to_cv2(pil_image_processed)
     else:
-        # detect, inpaint, ocr
+        # ocr, inpaint
         pil_image_processed, outside_text_data = process_outside_text(
             pil_image_processed,
             config,
@@ -1254,7 +1273,7 @@ def translate_and_render(
                     for bubble in sorted_bubble_data
                     if "image_b64" in bubble and "mime_type" in bubble
                 ]
-               
+
                 # 5. Translation
                 translated_texts = []
                 current_ocr_texts: list[str] = []
