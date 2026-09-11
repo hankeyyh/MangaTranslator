@@ -37,3 +37,5 @@ Thumbs.db
 *.txt
 output/
 testcase
+test_image_utils.py
+ellipse_mask.png
