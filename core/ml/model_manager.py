@@ -103,13 +103,22 @@ class ModelManager:
             )
 
     @staticmethod
+    def _models_dir() -> Path:
+        """Directory for local model weights.
+
+        Modal sets MT_MODELS_DIR to the Volume mount. Fall back to ./models
+        so local CLI behavior is unchanged.
+        """
+        return Path(os.environ.get("MT_MODELS_DIR") or "./models").resolve()
+
+    @staticmethod
     def _flux_sdcpp_base_dir() -> Path:
         """Base directory for sd.cpp Flux GGUF assets."""
-        return Path("./models").resolve() / "flux" / "sdcpp"
+        return ModelManager._models_dir() / "flux" / "sdcpp"
 
     def _init_model_paths(self):
         """Initialize model file paths."""
-        model_dir = Path("./models").resolve()
+        model_dir = self._models_dir()
         flux_sdcpp_dir = self._flux_sdcpp_base_dir()
         flux_kontext_sdcpp_dir = flux_sdcpp_dir / "kontext"
         return {
@@ -730,8 +739,9 @@ class ModelManager:
         """Determine which speech bubble model type a path corresponds to."""
         if model_path is None:
             return ModelType.YOLO_SPEECH_BUBBLE
-        p = Path(model_path)
-        if p == self.model_paths[ModelType.YOLO_SPEECH_BUBBLE_2]:
+        name = Path(model_path).name
+        yolo2 = self.model_paths[ModelType.YOLO_SPEECH_BUBBLE_2]
+        if name == yolo2.name or Path(model_path).resolve() == yolo2.resolve():
             return ModelType.YOLO_SPEECH_BUBBLE_2
         return ModelType.YOLO_SPEECH_BUBBLE
 
@@ -754,15 +764,17 @@ class ModelManager:
                 "Loading YOLO speech bubble detection model...", verbose=verbose
             )
 
-            path = (
-                self.model_paths[model_type] if model_path is None else Path(model_path)
+            canonical = self.model_paths[model_type]
+            path = canonical if model_path is None else Path(model_path)
+            hf_info = self.model_hf_repos[model_type]
+            self._ensure_hf_file(
+                hf_info["repo_id"],
+                hf_info["filename"],
+                canonical,
+                verbose=verbose,
             )
-
-            if path == self.model_paths[model_type]:
-                hf_info = self.model_hf_repos[model_type]
-                self._ensure_hf_file(
-                    hf_info["repo_id"], hf_info["filename"], path, verbose=verbose
-                )
+            if not path.exists():
+                path = canonical
 
             model = YOLO(str(path))
             self.models[model_type] = model

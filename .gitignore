@@ -4,6 +4,7 @@ __pycache__/
 *.pyd
 *.egg-info/
 .env
+.env.prod
 .python-version
 /build/
 /dist/

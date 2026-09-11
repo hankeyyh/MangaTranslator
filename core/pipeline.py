@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import math
@@ -304,7 +306,7 @@ def _get_cached_previous_context_image(
     image_path: Path,
     config: MangaTranslatorConfig,
     context_cache: OrderedDict | None,
-    context_cache_lock: threading.Lock | None,
+    context_cache_lock: Optional[threading.Lock],
 ) -> dict[str, str] | None:
     verbose = config.verbose
     if context_cache is None:
@@ -340,7 +342,7 @@ def _build_previous_context_images(
     image_index: int,
     config: MangaTranslatorConfig,
     context_cache: OrderedDict | None = None,
-    context_cache_lock: threading.Lock | None = None,
+    context_cache_lock: Optional[threading.Lock] = None,
 ) -> list[dict[str, str]]:
     if not getattr(config.translation, "send_full_page_context", False):
         return []
@@ -373,7 +375,7 @@ def _build_previous_context_texts(
     image_index: int,
     config: MangaTranslatorConfig,
     ocr_text_history: dict[Path, list[str]] | None = None,
-    ocr_text_history_lock: threading.Lock | None = None,
+    ocr_text_history_lock: Optional[threading.Lock] = None,
 ) -> list[list[str]]:
     """Collect OCR transcripts from up to N already-processed prior pages.
 
