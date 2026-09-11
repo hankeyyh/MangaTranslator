@@ -46,6 +46,44 @@ SUCCESS_PREFIX = "✅ "
 
 CANCELLATION_MANAGER: CancellationManager | None = None
 
+_BATCH_DEBUG_DIR_NAMES = frozenset({"lama_mask_debug"})
+_BATCH_DEBUG_DIR_SUFFIXES = (".llm-crops",)
+_BATCH_DEBUG_STEM_SUFFIXES = (".component-order-debug",)
+_BATCH_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def _is_batch_debug_artifact(path: Path) -> bool:
+    """True for debug dumps written next to translated pages."""
+    if any(
+        part in _BATCH_DEBUG_DIR_NAMES or part.endswith(_BATCH_DEBUG_DIR_SUFFIXES)
+        for part in path.parts
+    ):
+        return True
+    return path.stem.endswith(_BATCH_DEBUG_STEM_SUFFIXES)
+
+
+def _collect_batch_gallery_images(output_path: Path) -> list[str]:
+    """Collect translated images for the gallery, excluding debug dumps."""
+    if not output_path.exists():
+        return []
+
+    processed_files = [
+        file_path
+        for file_path in output_path.rglob("*.*")
+        if (
+            file_path.is_file()
+            and file_path.suffix.lower() in _BATCH_IMAGE_EXTENSIONS
+            and not _is_batch_debug_artifact(file_path)
+        )
+    ]
+    processed_files.sort(
+        key=lambda x: tuple(
+            int(part) if part.isdigit() else part
+            for part in re.split(r"(\d+)", x.stem)
+        )
+    )
+    return [str(file_path) for file_path in processed_files]
+
 
 def _radio_choices(values):
     return [(value, value) for value in values]
@@ -1011,23 +1049,7 @@ def handle_batch_click(
         )
 
         output_path = results["output_path"]
-        gallery_images = []
-        if output_path.exists():
-            # Use rglob to recursively find all images when structure is preserved
-            processed_files = list(output_path.rglob("*.*"))
-            image_extensions = [".jpg", ".jpeg", ".png", ".webp"]
-            processed_files = [
-                f
-                for f in processed_files
-                if f.is_file() and f.suffix.lower() in image_extensions
-            ]
-            processed_files.sort(  # Sort naturally (e.g., page_1, page_2, page_10)
-                key=lambda x: tuple(
-                    int(part) if part.isdigit() else part
-                    for part in re.split(r"(\d+)", x.stem)
-                )
-            )
-            gallery_images = [str(file_path) for file_path in processed_files]
+        gallery_images = _collect_batch_gallery_images(output_path)
 
         # Re-get font path for success message (logic already validated it)
         font_dir_path = (

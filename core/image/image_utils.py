@@ -229,6 +229,10 @@ def calculate_centroid_expansion_box(
         if moments["m00"] == 0:
             raise ImageProcessingError("Safe area mask has no area")
 
+        # 安全区质心
+        # 和包围盒中心的差别：包围盒中心是外接矩形的几何中心，不管形状怎么歪。
+        # 质心看的是质量分布：月牙、连体泡、一边鼓一边瘪时，质心会偏向面积更大的那一侧。
+        # 后面射线从这一点往外打，文字框才会跟着「真正的中心」走，而不是跟着 bbox。
         centroid_x = moments["m10"] / moments["m00"]
         centroid_y = moments["m01"] / moments["m00"]
 
@@ -258,6 +262,7 @@ def calculate_centroid_expansion_box(
         mask_h, mask_w = safe_area_mask.shape
 
         # Verify centroid is within safe area, adjust if needed
+        # 起点若不在安全区内，改到最近的安全像素。
         if (
             cy < 0
             or cy >= mask_h
@@ -277,6 +282,7 @@ def calculate_centroid_expansion_box(
             centroid_x, centroid_y = float(cx), float(cy)
             centroid = (centroid_x, centroid_y)
 
+        # 从锚点向左、右、上、下扫描，直到碰到非安全像素，得到四向距离
         left_zeros = np.where(safe_area_mask[cy, 0:cx] == 0)[0]
         dist_to_left_edge = cx - (left_zeros.max() if left_zeros.size > 0 else 0)
 
@@ -291,6 +297,7 @@ def calculate_centroid_expansion_box(
 
         # Only subtract 1 if distance > 1, otherwise use the distance directly
         # This prevents collapsing 1-pixel safe areas to 0x0
+        # 取左右较小值、上下较小值，各减 1（避免压到边上），再 ×2 得到对称矩形宽高
         min_width_dist = min(dist_to_left_edge, dist_to_right_edge)
         min_height_dist = min(dist_to_top_edge, dist_to_bottom_edge)
         safe_width_base = min_width_dist - 1 if min_width_dist > 1 else min_width_dist
@@ -308,6 +315,7 @@ def calculate_centroid_expansion_box(
             )
             raise ImageProcessingError("Failed to create safe area mask")
 
+        # 以质心为中心拼出矩形 (x, y, w, h)。
         box_x_float = centroid_x - max_safe_width / 2.0
         box_y_float = centroid_y - max_safe_height / 2.0
 
@@ -316,6 +324,7 @@ def calculate_centroid_expansion_box(
 
         guaranteed_box = (box_x, box_y, max_safe_width, max_safe_height)
 
+        # 矩形完全在画布内则返回；否则报错。
         if (
             box_x >= 0
             and box_y >= 0
