@@ -75,7 +75,7 @@ phase 2: concurrency=4 / 8              看扩容、排队、错误率
 ## 目录约定
 
 ```
-tests/bench/
+bench/
   README.md
   loadtest_jobs.py        # 发压脚本
   configs/                # 压测专用 payload，不要复用 supabase/volume 保存配置
@@ -97,10 +97,10 @@ tests/bench/
 ```bash
 export MT_API_KEY=...   # 也可 --api-key，或从 .env.prod 自动读
 
-python tests/bench/loadtest_jobs.py \
+python bench/loadtest_jobs.py \
   --remote \
-  --images tests/bench/fixtures \
-  --config tests/bench/configs/no_save.json \
+  --images bench/fixtures \
+  --config bench/configs/no_save.json \
   --concurrency 2 \
   --batch-size 2 \
   --duration 60 \

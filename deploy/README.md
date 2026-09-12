@@ -16,9 +16,32 @@
 ./deploy/deploy.sh test health
 ./deploy/deploy.sh test fast -i /path/to/page.png
 ./deploy/deploy.sh test precise -i /path/to/page.png
+./deploy/deploy.sh logs          # 实时跟随 App 日志（Ctrl+C 停）
 ```
 
 鉴权：`Authorization: Bearer $MT_API_KEY`。
+
+## 目录结构
+
+```
+deploy/
+├── README.md              本说明
+├── deploy.sh              部署入口：setup / deploy / models / test / logs
+├── modal_app.py           Modal App 定义：web 网关、process_job、download_models、list_volumes
+├── modal_config.py        常量：镜像、GPU、Volume 路径、字体别名、默认字体
+├── download_models.py     预热 Volume：模型 + 本仓库 fonts/ 字体包
+├── smoke_test.py          测试脚本：健康检查 / 提交 job / 消费 SSE
+└── api/                   网关与 Worker 实现（随镜像打进 /app/deploy）
+    ├── app.py             FastAPI：POST /v1/jobs、GET .../events、拉输出
+    ├── schemas.py         请求 / 事件 JSON 模型（JobConfigIn、CreateJobRequest）
+    ├── jobs.py            JobStore：Modal Dict 里的 job 元数据与有序事件
+    ├── config_map.py      把公开 JobConfig 转成 MangaTranslatorConfig
+    ├── fonts.py           font_name → Volume 上的字体包目录
+    ├── worker.py          GPU Worker：下载图 → 翻译渲染 → 上传 → 写 SSE 事件
+    └── storage.py         输出到 Supabase Storage
+```
+
+`modal_app.py` 只负责挂镜像、Volume、Secret 和函数入口；HTTP 与翻译逻辑在 `api/`。字体只来自本仓库 `fonts/`，不依赖隔壁项目。
 
 ## SSE 事件
 
