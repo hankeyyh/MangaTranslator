@@ -19,7 +19,7 @@ from core.config import (
 from core.llm_defaults import get_provider_sampling_defaults
 from core.validation import autodetect_yolo_model_path
 from deploy.api.fonts import resolve_font_dir
-from deploy.modal_config import FONTS_VOLUME_PATH, MODEL_MOUNT_PATH
+from deploy.modal_config import DEFAULT_FONT_NAME, FONTS_VOLUME_PATH, MODEL_MOUNT_PATH
 
 
 def build_mt_config(
@@ -38,7 +38,7 @@ def build_mt_config(
     rendering_in = config_in.get("rendering") or {}
     rtl = bool(rendering_in.get("rtl", True))
     output_format = str(config_in.get("output_format") or "webp")
-    font_dir = resolve_font_dir(str(config_in.get("font_name") or "Anime Ace 3.0"), fonts_root)
+    font_dir = resolve_font_dir(str(config_in.get("font_name") or DEFAULT_FONT_NAME), fonts_root)
     yolo_path = autodetect_yolo_model_path(models_dir, bubble_detector)
 
     outside_in = config_in.get("outside_text") or {}

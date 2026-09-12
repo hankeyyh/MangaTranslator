@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
-from deploy.modal_config import MAX_IMAGES_PER_JOB, PROVIDER_ALIASES
+from deploy.modal_config import DEFAULT_FONT_NAME, MAX_IMAGES_PER_JOB, PROVIDER_ALIASES
 
 OutputType = Literal["supabase", "volume", "none"]
 JobStatus = Literal["queued", "running", "completed", "failed"]
@@ -41,7 +41,7 @@ class JobConfigIn(BaseModel):
     model_name: str = "deepseek-v4-flash"
     translation_mode: str = "one-step"
     ocr_method: str = "LLM"
-    font_name: str = "Anime Ace 3.0"
+    font_name: str = DEFAULT_FONT_NAME
     detection: DetectionConfigIn = Field(default_factory=DetectionConfigIn)
     outside_text: OutsideTextConfigIn = Field(default_factory=OutsideTextConfigIn)
     rendering: RenderingConfigIn = Field(default_factory=RenderingConfigIn)
@@ -106,6 +106,7 @@ class ImageItemIn(BaseModel):
 
 
 class OutputSpecIn(BaseModel):
+    # none: 跑完翻译不写最终图、不上传。volume / supabase 才落盘。
     type: OutputType = "none"
     bucket: str | None = None
     paths: list[str] = Field(default_factory=list)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from deploy.modal_config import FONT_NAME_ALIASES
+from deploy.modal_config import DEFAULT_FONT_NAME, FONT_NAME_ALIASES
 
 
 def _pack_has_fonts(path: Path) -> bool:
@@ -18,7 +18,7 @@ def resolve_font_dir(font_name: str, fonts_root: Path) -> Path:
     if not fonts_root.is_dir():
         raise FileNotFoundError(f"fonts root not found: {fonts_root}")
 
-    requested = (font_name or "").strip() or "Anime Ace 3.0"
+    requested = (font_name or "").strip() or DEFAULT_FONT_NAME
     wanted = FONT_NAME_ALIASES.get(requested.lower(), requested)
 
     direct = fonts_root / wanted

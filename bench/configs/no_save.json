@@ -1,0 +1,25 @@
+{
+  "output": {
+    "type": "none"
+  },
+  "config": {
+    "input_language": "Japanese",
+    "output_language": "English",
+    "provider": "deepl",
+    "model_name": "deepl",
+    "translation_mode": "two-step",
+    "ocr_method": "manga-ocr",
+    "font_name": "noto_sans",
+    "detection": {
+      "bubble_detector_model": "yolo_2"
+    },
+    "outside_text": {
+      "enabled": true,
+      "inpainting_method": "lama_large"
+    },
+    "rendering": {
+      "rtl": true
+    },
+    "output_format": "webp"
+  }
+}

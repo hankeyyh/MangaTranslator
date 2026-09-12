@@ -35,6 +35,7 @@ GPU_CONFIG = {
     "timeout": WORKER_TIMEOUT_SECONDS,
     "min_containers": 0,
     "scaledown_window": 300,
+    "max_inputs": 2,
 }
 
 BASE_IMAGE = "pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime"
@@ -100,49 +101,13 @@ ENV_VARS = {
     "CUDA_VISIBLE_DEVICES": "0",
 }
 
-# Individual font files from manga-image-translator/fonts → Volume packs.
-MIT_FONT_PACKS = {
-    "Anime Ace 3.0": "anime_ace_3.ttf",
-    "Comic Shanns 2": "comic shanns 2.ttf",
-    "Comic Marker Deluxe": "Comic Marker Deluxe.ttf",
-    "Bangers": "Bangers-Regular.ttf",
-    "Komika Slim": "KOMIKASL.ttf",
-    "Caveat": "Caveat-VariableFont_wght.ttf",
-    "Noto Sans": "NotoSans-VariableFont_wdth,wght.ttf",
-    "Inter": "Inter-VariableFont_opsz,wght.ttf",
-    "Noto Sans SC": "NotoSansSC-VariableFont_wght.ttf",
-    "ZCOOL KuaiLe": "ZCOOLKuaiLe-Regular.ttf",
-    "Long Cang": "LongCang-Regular.ttf",
-    "Ma Shan Zheng": "MaShanZheng-Regular.ttf",
-    "Noto Sans JP": "NotoSansJP-VariableFont_wght.ttf",
-    "GenEi LateGo N": "GenEiLateGoN_v2.ttf",
-    "GenEi Antique": "Genei-Antique.ttf",
-    "M PLUS Rounded 1c": "MPLUSRounded1c-Regular.ttf",
-    "Zen Kurenaido": "ZenKurenaido-Regular.ttf",
-    "Noto Sans KR": "NotoSansKR-VariableFont_wght.ttf",
-    "KOMACON": "KOMACON.ttf",
-    "Gowun Dodum": "GowunDodum-Regular.ttf",
-    "Nanum Pen Script": "NanumPenScript-Regular.ttf",
-    "Noto Sans TC": "NotoSansTC-VariableFont_wght.ttf",
-    "LXGW WenKai TC": "LXGWWenKaiTC-Regular.ttf",
-    "Noto Sans Thai": "NotoSansThai-VariableFont_wdth,wght.ttf",
-    "Charmonman": "Charmonman-Regular.ttf",
-    "Itim": "Itim-Regular.ttf",
-    "Krub": "Krub-Regular.ttf",
-    "Playpen Sans Thai": "PlaypenSansThai-VariableFont_wght.ttf",
-    "Noto Sans Arabic": "NotoSansArabic-VariableFont_wdth,wght.ttf",
-    "QTS Manga": "QTSManga-Regular.ttf",
-}
+DEFAULT_FONT_NAME = "NotoSans"
 
 FONT_NAME_ALIASES = {
-    "anime ace": "Anime Ace 3.0",
-    "anime ace 3": "Anime Ace 3.0",
-    "anime ace 3.0": "Anime Ace 3.0",
-    "anime-ace-3": "Anime Ace 3.0",
-    "komika slim": "Komika Slim",
-    "komika-slim": "Komika Slim",
-    "noto sans": "Noto Sans",
-    "noto-sans": "Noto Sans",
+    "noto_sans": "NotoSans",
+    "komika_slim": "komika_slim",
+    "arial_unicode": "Arial-Unicode",
+    "cc_wild_words": "CC-Wild-Words",
 }
 
 PROVIDER_ALIASES = {

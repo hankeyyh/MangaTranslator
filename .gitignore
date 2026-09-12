@@ -13,6 +13,8 @@ __pycache__/
 /runtime/
 /deps/
 /tests/
+/bench/fixtures/*
+!/tests/bench/fixtures/.gitkeep
 start-webui.bat
 start-webui.sh
 *.otf

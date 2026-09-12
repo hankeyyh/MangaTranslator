@@ -147,7 +147,7 @@ PY
 
 view_logs() {
     resolve_modal
-    "$MODAL_BIN" app logs "$APP_NAME"
+    "$MODAL_BIN" app logs "$APP_NAME" -f "$@"
 }
 
 show_help() {
@@ -159,7 +159,7 @@ Commands:
   deploy    modal deploy deploy/modal_app.py
   models    Preload YOLO / OSB / LaMa / DBNet / manga-ocr / fonts onto Volume mt-models
   test      Smoke test submit + SSE (fast|precise|health)
-  logs      Show app logs
+  logs      Follow app logs in real time (Ctrl+C to stop)
   help      This message
 EOF
 }
@@ -169,7 +169,7 @@ case "${1:-help}" in
     deploy) deploy ;;
     models) download_models ;;
     test) shift; run_tests "$@" ;;
-    logs) view_logs ;;
+    logs) shift; view_logs "$@" ;;
     help|--help|-h) show_help ;;
     *) print_error "Unknown command: $1"; show_help; exit 1 ;;
 esac

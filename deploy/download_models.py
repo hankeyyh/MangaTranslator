@@ -6,10 +6,9 @@ import os
 import shutil
 from pathlib import Path
 
-from deploy.modal_config import FONTS_VOLUME_PATH, MIT_FONT_PACKS, MODEL_MOUNT_PATH
+from deploy.modal_config import FONTS_VOLUME_PATH, MODEL_MOUNT_PATH
 
 FONT_SRC_MT = Path("/opt/font-src/mt")
-FONT_SRC_MIT = Path("/opt/font-src/mit")
 
 
 def _copy_file(src: Path, dest: Path) -> None:
@@ -36,17 +35,6 @@ def install_fonts(fonts_root: Path = Path(FONTS_VOLUME_PATH)) -> int:
                     if not target.exists():
                         _copy_file(font, target)
                         copied += 1
-
-    if FONT_SRC_MIT.is_dir():
-        for pack_name, filename in MIT_FONT_PACKS.items():
-            src = FONT_SRC_MIT / filename
-            if not src.is_file():
-                print(f"skip missing MIT font: {filename}")
-                continue
-            dest = fonts_root / pack_name / src.name
-            if not dest.exists():
-                _copy_file(src, dest)
-                copied += 1
 
     packs = [p.name for p in fonts_root.iterdir() if p.is_dir()] if fonts_root.is_dir() else []
     print(f"font packs available: {packs}")

@@ -77,14 +77,26 @@ def _guess_suffix(url: str, default: str = ".png") -> str:
     return default
 
 
+def _output_type(request: dict[str, Any]) -> str:
+    return str((request.get("output") or {}).get("type") or "none")
+
+
+def _persist_output(request: dict[str, Any]) -> bool:
+    """volume / supabase 才落最终图；none 只跑翻译，不写盘、不上传。"""
+    return _output_type(request) != "none"
+
+
 def _write_output(
     request: dict[str, Any],
     image: dict[str, Any],
     index: int,
     local_path: Path,
-) -> str:
+) -> str | None:
+    if not _persist_output(request):
+        return None
+
     output = request.get("output") or {}
-    output_type = output.get("type") or "none"
+    output_type = _output_type(request)
     object_path = _output_path_for(request, image, index) or local_path.name
 
     if output_type == "supabase":
@@ -115,6 +127,7 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
     request = dict(job.get("request") or {})
     request["job_id"] = job_id
     images = _sorted_images(request)
+    persist = _persist_output(request)
     work_dir = Path(SCRATCH_MOUNT_PATH) / "work" / job_id
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -152,7 +165,9 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
                 output_ext = "." + str(
                     (request.get("config") or {}).get("output_format") or "webp"
                 )
-                result_path = work_dir / f"{index}_{image_id}_out{output_ext}"
+                result_path = (
+                    work_dir / f"{index}_{image_id}_out{output_ext}" if persist else None
+                )
                 _download_image(str(image.get("url") or ""), source_path)
 
                 ocr_out: list[str] = []
@@ -166,20 +181,21 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
                 if ocr_out:
                     previous_texts.append(list(ocr_out))
 
-                if not result_path.is_file():
-                    raise RuntimeError("translator did not write an output file")
+                if persist:
+                    if result_path is None or not result_path.is_file():
+                        raise RuntimeError("translator did not write an output file")
+                    output_path = _write_output(request, image, order, result_path)
+                else:
+                    output_path = None
 
-                output_path = _write_output(request, image, order, result_path)
+                completed: dict[str, Any] = {
+                    "image_id": image_id,
+                    "index": index,
+                }
+                if output_path:
+                    completed["output_path"] = output_path
                 job = store.get(job_id) or job
-                store.append_event(
-                    job,
-                    "image_completed",
-                    {
-                        "image_id": image_id,
-                        "index": index,
-                        "output_path": output_path,
-                    },
-                )
+                store.append_event(job, "image_completed", completed)
                 success_count += 1
             except Exception as exc:
                 error_count += 1
@@ -202,12 +218,15 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
             "job_completed",
             {"success_count": success_count, "error_count": error_count},
         )
-        if scratch_volume is not None:
+        if persist and scratch_volume is not None:
             scratch_volume.commit()
     except Exception as exc:
         job = store.get(job_id) or job
         store.append_event(job, "job_failed", {"error": str(exc)})
         traceback.print_exc()
-        if scratch_volume is not None:
+        if persist and scratch_volume is not None:
             scratch_volume.commit()
         raise
+    finally:
+        if not persist:
+            shutil.rmtree(work_dir, ignore_errors=True)

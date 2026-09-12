@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import os
 import uuid
@@ -23,6 +24,17 @@ from deploy.modal_config import (
 )
 
 SpawnJob = Callable[[str], Any]
+
+
+async def _invoke(fn: Any, *args: Any, **kwargs: Any) -> Any:
+    """Call a Modal method via .aio when present so FastAPI does not block."""
+    aio = getattr(fn, "aio", None)
+    if callable(aio):
+        return await aio(*args, **kwargs)
+    result = fn(*args, **kwargs)
+    if inspect.isawaitable(result):
+        return await result
+    return result
 
 
 def _require_api_key(authorization: str | None) -> None:
@@ -112,7 +124,7 @@ def create_app(
         if uploads:
             body = _save_multipart_files(job_id, body, uploads)
             if scratch_volume is not None:
-                scratch_volume.commit()
+                await _invoke(scratch_volume.commit)
 
         missing_urls = [item.image_id for item in body.images if not item.url]
         if missing_urls:
@@ -123,14 +135,14 @@ def create_app(
 
         request_payload = body.model_dump()
         request_payload["job_id"] = job_id
-        job, created = store.create_queued(
+        job, created = await store.create_queued_async(
             job_id,
             request_payload,
             len(body.images),
             replace_failed=True,
         )
         if created:
-            spawn_job(job_id)
+            await _invoke(spawn_job, job_id)
 
         response = CreateJobResponse(
             job_id=job_id,
@@ -148,7 +160,7 @@ def create_app(
         last_heartbeat = 0.0
         elapsed = 0.0
         while True:
-            job = store.get(job_id)
+            job = await store.get_async(job_id)
             if job is None:
                 yield (
                     "event: job_failed\n"
@@ -177,7 +189,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> StreamingResponse:
         _require_api_key(authorization)
-        if store.get(job_id) is None:
+        if await store.get_async(job_id) is None:
             raise HTTPException(status_code=404, detail="job not found")
         return StreamingResponse(
             _event_stream(job_id, after),

@@ -63,9 +63,6 @@ def _add_font_sources(image: modal.Image) -> modal.Image:
     mt_fonts = PROJECT_ROOT / "fonts"
     if mt_fonts.is_dir():
         image = image.add_local_dir(str(mt_fonts), "/opt/font-src/mt")
-    mit_fonts = PROJECT_ROOT.parent / "manga-image-translator" / "fonts"
-    if mit_fonts.is_dir():
-        image = image.add_local_dir(str(mit_fonts), "/opt/font-src/mit")
     return image
 
 
@@ -114,6 +111,7 @@ worker_image = _add_service_code(
     },
     secrets=function_secrets,
 )
+@modal.concurrent(max_inputs=GPU_CONFIG["max_inputs"])
 def process_job(job_id: str) -> None:
     import os
     import sys
@@ -200,7 +198,7 @@ def web():
 
     return create_app(
         job_backend=job_dict,
-        spawn_job=lambda job_id: process_job.spawn(job_id),
+        spawn_job=process_job.spawn,
         scratch_volume=scratch_volume,
     )
 
