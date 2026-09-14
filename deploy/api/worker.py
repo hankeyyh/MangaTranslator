@@ -10,6 +10,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+from PIL import Image
 
 from deploy.api.config_map import build_mt_config
 from deploy.api.jobs import JobStore
@@ -84,6 +85,22 @@ def _persist_output(request: dict[str, Any]) -> bool:
     return _output_type(request) != "none"
 
 
+def _compress_for_upload(path: Path, quality: int = 80) -> None:
+    image = Image.open(path)
+    suffix = path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        if image.mode not in {"RGB", "L"}:
+            image = image.convert("RGB")
+        image.save(path, format="JPEG", quality=quality, optimize=True)
+        return
+    if suffix == ".png":
+        image.save(path, format="PNG", optimize=True, compress_level=6)
+        return
+    if image.mode == "P":
+        image = image.convert("RGBA")
+    image.save(path, format="WEBP", quality=quality, method=6)
+
+
 def _write_output(
     request: dict[str, Any],
     image: dict[str, Any],
@@ -99,6 +116,7 @@ def _write_output(
 
     if output_type == "supabase":
         bucket = output.get("bucket") or "translation_storage"
+        _compress_for_upload(local_path)
         return upload_supabase_object(bucket, object_path, local_path)
 
     if output_type == "volume":
