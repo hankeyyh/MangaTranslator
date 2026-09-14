@@ -113,6 +113,12 @@ worker_image = _add_service_code(
 )
 @modal.concurrent(max_inputs=GPU_CONFIG["max_inputs"])
 def process_job(job_id: str) -> None:
+    """
+    process_job不是普通python函数，而是modal function句柄。调用它会在云端开一个带A10G的容器跑这段代码。
+    process_job.remote(): 同步rpc，等gpu跑完
+    process_job.spawn(): 异步rpc，投递后立刻返回FunctionCall
+    process_job.local(): 本地进程直接跑
+    """
     import os
     import sys
 
@@ -191,6 +197,10 @@ def list_volumes() -> dict:
 )
 @modal.asgi_app()
 def web():
+    """
+    作为asgi网关，挂载fastapp。asgi+fastapp 跑在同一个进程。
+    fastapp 通过 process_job.spawn 句柄发起rpc调用，告知 modal 控制面，在云端开一个带A10G的容器执行具体任务
+    """
     import sys
 
     sys.path.insert(0, APP_ROOT)

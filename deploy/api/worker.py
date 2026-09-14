@@ -24,11 +24,7 @@ SCRATCH_SCHEME = "scratch:"
 
 
 def _worker_id() -> str:
-    return (
-        os.environ.get("MODAL_TASK_ID")
-        or os.environ.get("HOSTNAME")
-        or "mt-worker"
-    )
+    return os.environ.get("MODAL_TASK_ID") or os.environ.get("HOSTNAME") or "mt-worker"
 
 
 def _sorted_images(request: dict[str, Any]) -> list[dict[str, Any]]:
@@ -36,7 +32,9 @@ def _sorted_images(request: dict[str, Any]) -> list[dict[str, Any]]:
     return sorted(images, key=lambda item: int(item.get("index") or 0))
 
 
-def _output_path_for(request: dict[str, Any], image: dict[str, Any], index: int) -> str | None:
+def _output_path_for(
+    request: dict[str, Any], image: dict[str, Any], index: int
+) -> str | None:
     output = request.get("output") or {}
     paths = list(output.get("paths") or [])
     if 0 <= index < len(paths) and paths[index]:
@@ -166,7 +164,9 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
                     (request.get("config") or {}).get("output_format") or "webp"
                 )
                 result_path = (
-                    work_dir / f"{index}_{image_id}_out{output_ext}" if persist else None
+                    work_dir / f"{index}_{image_id}_out{output_ext}"
+                    if persist
+                    else None
                 )
                 _download_image(str(image.get("url") or ""), source_path)
 

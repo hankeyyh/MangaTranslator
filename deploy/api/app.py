@@ -30,6 +30,7 @@ async def _invoke(fn: Any, *args: Any, **kwargs: Any) -> Any:
     """Call a Modal method via .aio when present so FastAPI does not block."""
     aio = getattr(fn, "aio", None)
     if callable(aio):
+        # await process_job.spawn.aio(job_id)
         return await aio(*args, **kwargs)
     result = fn(*args, **kwargs)
     if inspect.isawaitable(result):
