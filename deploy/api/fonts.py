@@ -19,7 +19,8 @@ def resolve_font_dir(font_name: str, fonts_root: Path) -> Path:
         raise FileNotFoundError(f"fonts root not found: {fonts_root}")
 
     requested = (font_name or "").strip() or DEFAULT_FONT_NAME
-    wanted = FONT_NAME_ALIASES.get(requested.lower(), requested)
+    alias_key = requested.lower().replace("_", "-")
+    wanted = FONT_NAME_ALIASES.get(alias_key, requested)
 
     direct = fonts_root / wanted
     if _pack_has_fonts(direct):

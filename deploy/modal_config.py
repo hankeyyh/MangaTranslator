@@ -101,13 +101,13 @@ ENV_VARS = {
     "CUDA_VISIBLE_DEVICES": "0",
 }
 
-DEFAULT_FONT_NAME = "NotoSans"
+DEFAULT_FONT_NAME = "noto-sans"
 
 FONT_NAME_ALIASES = {
-    "noto_sans": "NotoSans",
-    "komika_slim": "komika_slim",
-    "arial_unicode": "Arial-Unicode",
-    "cc_wild_words": "CC-Wild-Words",
+    "noto-sans": "NotoSans",
+    "komika-slim": "komika_slim",
+    "arial-unicode": "Arial-Unicode",
+    "cc-wild-words": "CC-Wild-Words",
 }
 
 PROVIDER_ALIASES = {

@@ -9,7 +9,7 @@
     "model_name": "deepl",
     "translation_mode": "two-step",
     "ocr_method": "manga-ocr",
-    "font_name": "noto_sans",
+    "font_name": "noto-sans",
     "detection": {
       "bubble_detector_model": "yolo_2"
     },
