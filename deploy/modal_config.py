@@ -34,7 +34,7 @@ GPU_CONFIG = {
     "memory": 16384,
     "timeout": WORKER_TIMEOUT_SECONDS,
     "min_containers": 0,
-    "scaledown_window": 300,
+    "scaledown_window": 60,
     "max_inputs": 2,
 }
 
