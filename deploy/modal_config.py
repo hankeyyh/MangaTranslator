@@ -114,6 +114,10 @@ FONT_NAME_ALIASES = {
     "noto-sans-sc": "NotoSansSc",
     "long-cang": "LongCang",
     "ma-shan-zheng": "MaShanZheng",
+    # cht
+    "noto-sans-tc": "NotoSansTc",
+    "lxgw-wenkai-tc": "LXGW-WenKai-TC"
+    # ja
 }
 
 PROVIDER_ALIASES = {
