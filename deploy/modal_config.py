@@ -116,8 +116,13 @@ FONT_NAME_ALIASES = {
     "ma-shan-zheng": "MaShanZheng",
     # cht
     "noto-sans-tc": "NotoSansTc",
-    "lxgw-wenkai-tc": "LXGW-WenKai-TC"
+    "lxgw-wenkai-tc": "LXGW-WenKai-TC",
     # ja
+    "genei-antique": "GeneiAntique",
+    "noto-sans-jp": "NotoSansJp",
+    "genei-late-go-n": "GeneiLateGoN",
+    "zen-kurenaido": "ZenKurenaido",
+    # kor
 }
 
 PROVIDER_ALIASES = {
