@@ -127,6 +127,14 @@ FONT_NAME_ALIASES = {
     "noto-sans-kr": "NotoSansKr",
     "gowun-dodum": "GowunDodum",
     "nanum-pen-script": "NanumPenScript",
+    # tha
+    "itim": "Itim",
+    "noto-sans-thai": "NotoSansThai",
+    "charmonman": "Charmonman",
+    "playpen-sans-thai": "PlaypenSansThai",
+    # ara
+    "noto-sans-arabic": "NotoSansArabic",
+    "qts-manga": "QtsManga",
 }
 
 PROVIDER_ALIASES = {
