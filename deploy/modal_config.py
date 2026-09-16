@@ -104,10 +104,16 @@ ENV_VARS = {
 DEFAULT_FONT_NAME = "noto-sans"
 
 FONT_NAME_ALIASES = {
+    # latin
     "noto-sans": "NotoSans",
     "cc-wild-words": "CC-Wild-Words",
     "bangers": "Bangers",
     "caveat": "Caveat",
+    # chs
+    "zcool-kuai-le": "ZcoolKuaiLe",
+    "noto-sans-sc": "NotoSansSc",
+    "long-cang": "LongCang",
+    "ma-shan-zheng": "MaShanZheng",
 }
 
 PROVIDER_ALIASES = {
