@@ -123,6 +123,10 @@ FONT_NAME_ALIASES = {
     "genei-late-go-n": "GeneiLateGoN",
     "zen-kurenaido": "ZenKurenaido",
     # kor
+    "komacon": "KOMACON",
+    "noto-sans-kr": "NotoSansKr",
+    "gowun-dodum": "GowunDodum",
+    "nanum-pen-script": "NanumPenScript",
 }
 
 PROVIDER_ALIASES = {
