@@ -105,9 +105,9 @@ DEFAULT_FONT_NAME = "noto-sans"
 
 FONT_NAME_ALIASES = {
     "noto-sans": "NotoSans",
-    "komika-slim": "komika_slim",
-    "arial-unicode": "Arial-Unicode",
     "cc-wild-words": "CC-Wild-Words",
+    "bangers": "Bangers",
+    "caveat": "Caveat",
 }
 
 PROVIDER_ALIASES = {
