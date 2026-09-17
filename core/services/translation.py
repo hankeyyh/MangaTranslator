@@ -1332,23 +1332,36 @@ def _translate_texts_with_deepl(
     config: TranslationConfig,
     texts: list[str],
     debug: bool = False,
+    previous_context_texts: list[list[str]] | None = None,
 ) -> list[str]:
     """Translate OCR strings through DeepL, sharing the batch request budget."""
     coordinator = getattr(config, "request_coordinator", None)
     if coordinator is not None and not coordinator.in_slot():
-        return coordinator.run(_translate_texts_with_deepl, config, texts, debug)
+        return coordinator.run(
+            _translate_texts_with_deepl,
+            config,
+            texts,
+            debug,
+            previous_context_texts=previous_context_texts,
+        )
 
     api_key = config.deepl_api_key
     if not api_key:
         raise TranslationError("DeepL API key is missing.")
-    return call_deepl_endpoint(
+    translations = call_deepl_endpoint(
         api_key=api_key,
         texts=texts,
         source_language=config.input_language,
         target_language=config.output_language,
         context=config.special_instructions,
+        previous_pages=previous_context_texts,
         debug=debug,
     )
+    numbered = "\n".join(
+        f"{i}: {text}" for i, text in enumerate(translations, start=1)
+    )
+    log_message(f"Raw response:\n---\n{numbered}\n---", always_print=True)
+    return translations
 
 
 def _build_rosetta_instruction(
@@ -1970,7 +1983,10 @@ The target language is {output_language}. Use the appropriate translation approa
             if use_deepl:
                 log_message("Starting DeepL translation", verbose=debug)
                 final_translations = _translate_texts_with_deepl(
-                    config, formatted_texts, debug
+                    config,
+                    formatted_texts,
+                    debug,
+                    previous_context_texts=cleaned_previous_texts,
                 )
             elif use_rosetta:
                 log_message(

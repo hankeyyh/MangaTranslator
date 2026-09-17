@@ -56,6 +56,44 @@ _OCR_FAILED = "[OCR FAILED]"
 _MAX_TEXTS_PER_REQUEST = 50
 
 
+def _usable_source_line(text: str | None) -> str | None:
+    cleaned = (text or "").strip()
+    if not cleaned or cleaned == _OCR_FAILED:
+        return None
+    return cleaned
+
+
+def build_deepl_context(
+    texts: list[str],
+    previous_pages: list[list[str]] | None = None,
+    extra: str | None = None,
+) -> str | None:
+    """Build DeepL ``context`` from surrounding source-language dialogue.
+
+    DeepL translates each ``text`` independently. Passing the rest of the page
+    (and optional previous pages) as untranslated ``context`` lets the engine
+    resolve pronouns and ambiguous fragments. ``extra`` is appended last so
+    existing special-instructions still reach the API, but source dialogue
+    remains the primary cue.
+    """
+    lines: list[str] = []
+    for page_texts in previous_pages or []:
+        for text in page_texts or []:
+            cleaned = _usable_source_line(text)
+            if cleaned:
+                lines.append(cleaned)
+    for text in texts:
+        cleaned = _usable_source_line(text)
+        if cleaned:
+            lines.append(cleaned)
+    extra_cleaned = (extra or "").strip()
+    if extra_cleaned:
+        lines.append(extra_cleaned)
+    if not lines:
+        return None
+    return "\n".join(lines)
+
+
 def _to_deepl_source_lang(language_name: str) -> str:
     if language_name == "English":
         return "EN"
@@ -101,6 +139,7 @@ def call_deepl_endpoint(
     source_language: str,
     target_language: str,
     context: str | None = None,
+    previous_pages: list[list[str]] | None = None,
     debug: bool = False,
     max_retries: int = 3,
     base_delay: float = 1.0,
@@ -112,7 +151,10 @@ def call_deepl_endpoint(
         texts: Source strings in reading order. ``[OCR FAILED]`` is preserved.
         source_language: UI language name (e.g. ``Japanese``).
         target_language: UI language name (e.g. ``English``).
-        context: Optional extra context that is not translated (DeepL ``context``).
+        context: Optional extra notes appended after page dialogue (DeepL
+            ``context``; not translated, not billed).
+        previous_pages: Optional older-to-newer previous-page OCR transcripts
+            included in ``context``.
         debug: Verbose logging.
         max_retries: Retries for rate-limit / transient errors.
         base_delay: Initial retry delay in seconds.
@@ -140,14 +182,25 @@ def call_deepl_endpoint(
         return results
 
     extra_kwargs: dict[str, Any] = {}
-    if context and context.strip():
-        extra_kwargs["context"] = context.strip()
+    assembled_context = build_deepl_context(
+        texts,
+        previous_pages=previous_pages,
+        extra=context,
+    )
+    if assembled_context:
+        extra_kwargs["context"] = assembled_context
 
     log_message(
         f"DeepL translating {len(pending_indices)} segment(s) "
         f"{source_lang} → {target_lang}",
         verbose=debug,
     )
+    if assembled_context:
+        log_message(
+            f"DeepL context ({len(assembled_context)} chars):\n---\n"
+            f"{assembled_context}\n---",
+            verbose=debug,
+        )
 
     for chunk_start in range(0, len(pending_indices), _MAX_TEXTS_PER_REQUEST):
         chunk_indices = pending_indices[
