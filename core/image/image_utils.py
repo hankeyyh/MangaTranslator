@@ -45,6 +45,8 @@ def cv2_to_pil(cv2_image):
     Returns:
         PIL.Image: PIL Image object
     """
+    if cv2_image is None or getattr(cv2_image, "size", 0) == 0:
+        raise ImageProcessingError("Cannot convert empty OpenCV image to PIL")
     if len(cv2_image.shape) == 3:
         if cv2_image.shape[2] == 3:  # BGR
             rgb_image = cv2.cvtColor(cv2_image, cv2.COLOR_BGR2RGB)

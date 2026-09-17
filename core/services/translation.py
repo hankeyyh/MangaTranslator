@@ -2224,6 +2224,21 @@ def prepare_bubble_images_for_translation(
                     x2 = max(x2, mx2)
                     y2 = max(y2, my2)
 
+        img_h, img_w = original_cv_image.shape[:2]
+        x1 = max(0, min(int(np.floor(x1)), img_w))
+        y1 = max(0, min(int(np.floor(y1)), img_h))
+        x2 = max(0, min(int(np.ceil(x2)), img_w))
+        y2 = max(0, min(int(np.ceil(y2)), img_h))
+
+        if x2 <= x1 or y2 <= y1:
+            log_message(
+                f"Skipping bubble {bubble['bbox']}: crop is empty after clipping to image bounds",
+                always_print=True,
+            )
+            prepared_bubble["image_b64"] = None
+            prepared_bubbles.append(prepared_bubble)
+            continue
+
         bubble_image_cv = original_cv_image[y1:y2, x1:x2].copy()
 
         # White-out conjoined neighbor text regions visible in this crop
@@ -2252,7 +2267,16 @@ def prepare_bubble_images_for_translation(
                         # Apply whiteout precisely on neighbor's mask pixels
                         bubble_image_cv[region_mask] = 255
 
-        bubble_image_pil = cv2_to_pil(bubble_image_cv)
+        try:
+            bubble_image_pil = cv2_to_pil(bubble_image_cv)
+        except Exception as e:
+            log_message(
+                f"Error converting bubble {bubble['bbox']} to PIL: {e}",
+                always_print=True,
+            )
+            prepared_bubble["image_b64"] = None
+            prepared_bubbles.append(prepared_bubble)
+            continue
 
         if upscale_method == "model" or upscale_method == "model_lite":
             final_bubble_pil = process_bubble_image_cached(
