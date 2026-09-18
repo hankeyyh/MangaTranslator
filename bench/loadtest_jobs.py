@@ -262,6 +262,11 @@ def parse_arguments() -> argparse.Namespace:
         type=positive_int,
         help="单次 submit+SSE 上限秒数；超时记 timeout 并取消 reader",
     )
+    parser.add_argument(
+        "--test-mode",
+        action="store_true",
+        help="跳过真实翻译，用占位文本渲染（对应 config.test_mode）",
+    )
     args = parser.parse_args()
     if args.batch_size > MAX_IMAGES_PER_JOB:
         raise SystemExit(
@@ -619,5 +624,11 @@ if __name__ == "__main__":
         config = json.load(f)
 
     config = validate_bench_config(config, args.config)
+    if args.test_mode:
+        inner = config.get("config")
+        if not isinstance(inner, dict):
+            inner = {}
+            config["config"] = inner
+        inner["test_mode"] = True
 
     asyncio.run(benchpress(args, image_batchs, config))

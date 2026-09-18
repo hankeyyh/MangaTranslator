@@ -49,6 +49,7 @@ def build_mt_config(
     inpainting_method = str(outside_in.get("inpainting_method") or "lama_large")
     if inpainting_method in {"flux_klein_9b", "flux_klein_4b", "flux_kontext"}:
         inpainting_method = "lama_large"
+    test_mode = bool(config_in.get("test_mode", False))
 
     return MangaTranslatorConfig(
         yolo_model_path=str(yolo_path),
@@ -78,4 +79,5 @@ def build_mt_config(
         preprocessing=PreprocessingConfig(enabled=False),
         verbose=True,
         parallel_requests=1,
+        test_mode=test_mode,
     )

@@ -46,6 +46,7 @@ class JobConfigIn(BaseModel):
     outside_text: OutsideTextConfigIn = Field(default_factory=OutsideTextConfigIn)
     rendering: RenderingConfigIn = Field(default_factory=RenderingConfigIn)
     output_format: str = "webp"
+    test_mode: bool = False
 
     @field_validator("provider")
     @classmethod
