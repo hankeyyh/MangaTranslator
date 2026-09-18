@@ -36,6 +36,7 @@ start-webui.sh
 .DS_Store
 Thumbs.db
 /.vscode/
+/logs/
 *.log
 *.txt
 output/

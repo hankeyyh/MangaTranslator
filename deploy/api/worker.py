@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import threading
 import traceback
 from pathlib import Path
 from typing import Any
@@ -19,9 +20,13 @@ from deploy.modal_config import (
     FONTS_VOLUME_PATH,
     MODEL_MOUNT_PATH,
     SCRATCH_MOUNT_PATH,
+    WORK_DIR_ROOT,
 )
 
 SCRATCH_SCHEME = "scratch:"
+WORK_ROOT = Path(WORK_DIR_ROOT)
+# process_job is @modal.concurrent: reload/commit/read/write share one Volume mount.
+_VOLUME_LOCK = threading.Lock()
 
 
 def _worker_id() -> str:
@@ -46,13 +51,19 @@ def _output_path_for(
     return f"{job_id}/{image_id}.{fmt}"
 
 
+def _copy_from_scratch(url: str, dest: Path) -> None:
+    source = Path(SCRATCH_MOUNT_PATH) / url[len(SCRATCH_SCHEME) :]
+    if not source.is_file():
+        raise FileNotFoundError(f"scratch image not found: {source}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(source, dest)
+
+
 def _download_image(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if url.startswith(SCRATCH_SCHEME):
-        source = Path(SCRATCH_MOUNT_PATH) / url[len(SCRATCH_SCHEME) :]
-        if not source.is_file():
-            raise FileNotFoundError(f"scratch image not found: {source}")
-        shutil.copyfile(source, dest)
+        with _VOLUME_LOCK:
+            _copy_from_scratch(url, dest)
         return
 
     parsed = urlparse(url)
@@ -121,20 +132,42 @@ def _write_output(
 
     if output_type == "volume":
         dest = Path(SCRATCH_MOUNT_PATH) / "results" / object_path
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(local_path, dest)
+        with _VOLUME_LOCK:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(local_path, dest)
         return object_path
 
     return object_path
 
 
+def _reload_scratch_volume(scratch_volume: Any) -> None:
+    try:
+        scratch_volume.reload()
+    except Exception as exc:
+        print(f"scratch volume reload skipped: {exc}")
+
+
+def _commit_scratch_volume(scratch_volume: Any) -> None:
+    with _VOLUME_LOCK:
+        scratch_volume.commit()
+
+
+def _maybe_reload_scratch(
+    images: list[dict[str, Any]], scratch_volume: Any | None
+) -> None:
+    if scratch_volume is None:
+        return
+    if not any(
+        str(image.get("url") or "").startswith(SCRATCH_SCHEME) for image in images
+    ):
+        return
+    with _VOLUME_LOCK:
+        _reload_scratch_volume(scratch_volume)
+
+
 def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) -> None:
-    os.chdir("/app")
-    if scratch_volume is not None:
-        try:
-            scratch_volume.reload()
-        except Exception as exc:
-            print(f"scratch volume reload skipped: {exc}")
+    if Path("/app").is_dir():
+        os.chdir("/app")
     store = JobStore(job_backend)
     job = store.get(job_id)
     if job is None:
@@ -144,10 +177,15 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
     request["job_id"] = job_id
     images = _sorted_images(request)
     persist = _persist_output(request)
-    work_dir = Path(SCRATCH_MOUNT_PATH) / "work" / job_id
-    work_dir.mkdir(parents=True, exist_ok=True)
+    wrote_volume = persist and _output_type(request) == "volume"
+    work_dir = WORK_ROOT / job_id
 
     try:
+        work_dir.mkdir(parents=True, exist_ok=True)
+        # _maybe_reload_scratch：让 GPU 容器看见网关刚 commit 进 Volume 的上传图。
+        # Modal Volume 不是 NFS 实时共享盘。每个容器挂载的是 某个时间点的快照
+        # GPU worker 经常是热容器（上一单跑完没立刻销毁）。它挂着的 /scratch 还是容器启动时那份旧快照，里面没有这一单的 uploads。
+        _maybe_reload_scratch(images, scratch_volume)
         store.append_event(job, "started", {"worker_id": _worker_id()})
         from core.pipeline import translate_and_render
 
@@ -176,7 +214,8 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
                 },
             )
             try:
-                suffix = _guess_suffix(str(image.get("url") or ""))
+                url = str(image.get("url") or "")
+                suffix = _guess_suffix(url)
                 source_path = work_dir / f"{index}_{image_id}{suffix}"
                 output_ext = "." + str(
                     (request.get("config") or {}).get("output_format") or "webp"
@@ -186,7 +225,7 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
                     if persist
                     else None
                 )
-                _download_image(str(image.get("url") or ""), source_path)
+                _download_image(url, source_path)
 
                 ocr_out: list[str] = []
                 translate_and_render(
@@ -236,15 +275,14 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
             "job_completed",
             {"success_count": success_count, "error_count": error_count},
         )
-        if persist and scratch_volume is not None:
-            scratch_volume.commit()
+        if wrote_volume and scratch_volume is not None:
+            _commit_scratch_volume(scratch_volume)
     except Exception as exc:
         job = store.get(job_id) or job
         store.append_event(job, "job_failed", {"error": str(exc)})
         traceback.print_exc()
-        if persist and scratch_volume is not None:
-            scratch_volume.commit()
+        if wrote_volume and scratch_volume is not None:
+            _commit_scratch_volume(scratch_volume)
         raise
     finally:
-        if not persist:
-            shutil.rmtree(work_dir, ignore_errors=True)
+        shutil.rmtree(work_dir, ignore_errors=True)

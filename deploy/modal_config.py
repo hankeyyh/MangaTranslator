@@ -8,6 +8,10 @@ JOB_DICT_NAME = "mt-jobs"
 
 MODEL_MOUNT_PATH = "/app/models"
 SCRATCH_MOUNT_PATH = "/scratch"
+# Ephemeral per-job workspace. Do not put this on the Modal Volume:
+# @modal.concurrent process_job calls volume.reload() in the same container,
+# and a reload makes the Volume look empty — mkdir /scratch/work then EPERM.
+WORK_DIR_ROOT = "/tmp/mt-work"
 APP_ROOT = "/app"
 FONTS_VOLUME_PATH = f"{MODEL_MOUNT_PATH}/fonts"
 
@@ -35,7 +39,7 @@ GPU_CONFIG = {
     "timeout": WORKER_TIMEOUT_SECONDS,
     "min_containers": 0,
     "scaledown_window": 60,
-    "max_inputs": 2,
+    "max_inputs": 1,
 }
 
 BASE_IMAGE = "pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime"

@@ -111,6 +111,10 @@ worker_image = _add_service_code(
     },
     secrets=function_secrets,
 )
+# For synchronous Functions, Modal will execute concurrent inputs on separate threads.
+# This means that the Function implementation must be thread-safe.
+# doc: https://modal.com/docs/guide/concurrent-inputs#concurrency-mechanisms
+# 主流做法：在生产中，通常采用 “一个容器 → 一个推理进程 → 单线程执行推理” 的模式
 @modal.concurrent(max_inputs=GPU_CONFIG["max_inputs"])
 def process_job(job_id: str) -> None:
     """
