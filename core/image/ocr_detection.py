@@ -750,6 +750,35 @@ class OutsideTextDetector:
 
         return groups, image_pil
 
+    def _osb_boxes_from_group(self, group: dict) -> list[tuple[int, int, int, int]]:
+        """Axis-aligned boxes already chosen as OSB inpaint regions."""
+        boxes: list[tuple[int, int, int, int]] = []
+        for individual in group.get("individual_masks") or []:
+            ys, xs = np.where(np.asarray(individual))
+            if ys.size == 0 or xs.size == 0:
+                continue
+            boxes.append(
+                (
+                    int(xs.min()),
+                    int(ys.min()),
+                    int(xs.max()) + 1,
+                    int(ys.max()) + 1,
+                )
+            )
+        if boxes:
+            return boxes
+        bbox = group.get("bbox") or {}
+        x = int(bbox.get("x", 0))
+        y = int(bbox.get("y", 0))
+        return [
+            (
+                x,
+                y,
+                x + int(bbox.get("width", 0)),
+                y + int(bbox.get("height", 0)),
+            )
+        ]
+
     def _apply_dbnet_stroke_masks(
         self,
         image_pil: Image.Image,
@@ -768,8 +797,12 @@ class OutsideTextDetector:
             from core.image.text_mask_refine import dump_stroke_debug, refine_box_masks
 
             image_rgb = np.asarray(image_pil.convert("RGB"))
+            group_boxes = [self._osb_boxes_from_group(group) for group in groups]
             raw_mask = detect_text_raw_mask(
-                image_rgb, detect_size=detect_size, verbose=verbose
+                image_rgb,
+                detect_size=detect_size,
+                verbose=verbose,
+                boxes=[box for boxes in group_boxes for box in boxes],
             )
             log_message(
                 "Refining OSB masks with DBNet raw mask"
@@ -777,32 +810,7 @@ class OutsideTextDetector:
                 verbose=verbose,
             )
             page_stroke = np.zeros(image_rgb.shape[:2], dtype=bool)
-            for group in groups:
-                boxes = []
-                for individual in group.get("individual_masks") or []:
-                    ys, xs = np.where(np.asarray(individual))
-                    if ys.size == 0 or xs.size == 0:
-                        continue
-                    boxes.append(
-                        (
-                            int(xs.min()),
-                            int(ys.min()),
-                            int(xs.max()) + 1,
-                            int(ys.max()) + 1,
-                        )
-                    )
-                if not boxes:
-                    bbox = group.get("bbox") or {}
-                    x = int(bbox.get("x", 0))
-                    y = int(bbox.get("y", 0))
-                    boxes.append(
-                        (
-                            x,
-                            y,
-                            x + int(bbox.get("width", 0)),
-                            y + int(bbox.get("height", 0)),
-                        )
-                    )
+            for group, boxes in zip(groups, group_boxes):
                 stroke = refine_box_masks(
                     image_rgb,
                     raw_mask,
