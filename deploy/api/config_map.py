@@ -53,7 +53,11 @@ def build_mt_config(
 
     return MangaTranslatorConfig(
         yolo_model_path=str(yolo_path),
-        detection=DetectionConfig(bubble_detector_model=bubble_detector),
+        detection=DetectionConfig(
+            bubble_detector_model=bubble_detector,
+            # True：额外跑 YOLOv12x，把偏紧的气泡框扩到盖住漏字。现网 OSB 不走该模型，仅用于撑框成本过高，故关掉。
+            use_osb_text_verification=False,
+        ),
         cleaning=CleaningConfig(),
         translation=TranslationConfig(
             provider=provider,
@@ -73,6 +77,8 @@ def build_mt_config(
         outside_text=OutsideTextConfig(
             enabled=outside_enabled,
             inpainting_method=inpainting_method,
+            # True：OSB 用 RT-DETR 的 text_free（旁白/字幕块），不跑 YOLOv12x。
+            # False：YOLOv12x 全页检字后去掉气泡内结果；模型失败才回退 text_free。
             osb_text_free_only=True,
             huggingface_token=os.environ.get("HF_TOKEN") or "",
         ),
