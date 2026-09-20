@@ -1,4 +1,9 @@
-"""GPU worker: download → translate_and_render → upload → append events."""
+"""GPU worker: download → translate_and_render → persist → append events.
+
+Persist (compress + supabase/volume) runs on a side thread so the next page can
+translate while the previous page uploads. image_completed still fires after
+the object is readable. Upload time remains on this GPU function's wall clock.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +11,7 @@ import os
 import shutil
 import threading
 import traceback
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -30,6 +36,11 @@ SCRATCH_SCHEME = "scratch:"
 WORK_ROOT = Path(WORK_DIR_ROOT)
 # process_job is @modal.concurrent: reload/commit/read/write share one Volume mount.
 _VOLUME_LOCK = threading.Lock()
+# JobStore get/modify/put is not atomic across persist threads.
+_JOB_LOCK = threading.Lock()
+# One in-flight upload while the GPU translates the next page is enough;
+# a second slot covers compress/upload jitter without opening 20 HTTP clients.
+_PERSIST_WORKERS = 2
 
 
 def warmup_imports() -> None:
@@ -185,6 +196,72 @@ def _commit_scratch_volume(scratch_volume: Any) -> None:
         scratch_volume.commit()
 
 
+def _append_job_event(
+    store: JobStore,
+    job_id: str,
+    event: str,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    with _JOB_LOCK:
+        job = store.get(job_id)
+        if job is None:
+            raise RuntimeError(f"job not found: {job_id}")
+        return store.append_event(job, event, payload)
+
+
+def _persist_translated_image(
+    store: JobStore,
+    job_id: str,
+    request: dict[str, Any],
+    image: dict[str, Any],
+    order: int,
+    result_path: Path,
+) -> bool:
+    image_id = str(image.get("image_id"))
+    index = int(image.get("index") or order)
+    try:
+        if not result_path.is_file():
+            raise RuntimeError("translator did not write an output file")
+        output_path = _write_output(request, image, order, result_path)
+        completed: dict[str, Any] = {
+            "image_id": image_id,
+            "index": index,
+        }
+        if output_path:
+            completed["output_path"] = output_path
+        _append_job_event(store, job_id, "image_completed", completed)
+        return True
+    except Exception as exc:
+        _append_job_event(
+            store,
+            job_id,
+            "image_failed",
+            {
+                "image_id": image_id,
+                "index": index,
+                "error": str(exc),
+            },
+        )
+        print(f"image {image_id} persist failed: {exc}", flush=True)
+        traceback.print_exc()
+        return False
+
+
+def _wait_persist_results(futures: list[Future[bool]]) -> tuple[int, int]:
+    success_count = 0
+    error_count = 0
+    for future in futures:
+        try:
+            if future.result():
+                success_count += 1
+            else:
+                error_count += 1
+        except Exception:
+            error_count += 1
+            traceback.print_exc()
+    return success_count, error_count
+
+
 def _maybe_reload_scratch(
     images: list[dict[str, Any]], scratch_volume: Any | None
 ) -> None:
@@ -212,6 +289,8 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
     persist = _persist_output(request)
     wrote_volume = persist and _output_type(request) == "volume"
     work_dir = WORK_ROOT / job_id
+    persist_pool = ThreadPoolExecutor(max_workers=_PERSIST_WORKERS) if persist else None
+    persist_futures: list[Future[bool]] = []
 
     try:
         work_dir.mkdir(parents=True, exist_ok=True)
@@ -219,7 +298,7 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
         # Modal Volume 不是 NFS 实时共享盘。每个容器挂载的是 某个时间点的快照
         # GPU worker 经常是热容器（上一单跑完没立刻销毁）。它挂着的 /scratch 还是容器启动时那份旧快照，里面没有这一单的 uploads。
         _maybe_reload_scratch(images, scratch_volume)
-        store.append_event(job, "started", {"worker_id": _worker_id()})
+        _append_job_event(store, job_id, "started", {"worker_id": _worker_id()})
         from core.pipeline import translate_and_render
 
         mt_config = build_mt_config(
@@ -235,9 +314,9 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
         for order, image in enumerate(images):
             image_id = str(image.get("image_id"))
             index = int(image.get("index") or order)
-            job = store.get(job_id) or job
-            store.append_event(
-                job,
+            _append_job_event(
+                store,
+                job_id,
                 "image_progress",
                 {
                     "image_id": image_id,
@@ -272,26 +351,34 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
                     previous_texts.append(list(ocr_out))
 
                 if persist:
+                    if persist_pool is None:
+                        raise RuntimeError("persist pool was not started")
                     if result_path is None or not result_path.is_file():
                         raise RuntimeError("translator did not write an output file")
-                    output_path = _write_output(request, image, order, result_path)
+                    persist_futures.append(
+                        persist_pool.submit(
+                            _persist_translated_image,
+                            store,
+                            job_id,
+                            request,
+                            dict(image),
+                            order,
+                            result_path,
+                        )
+                    )
                 else:
-                    output_path = None
-
-                completed: dict[str, Any] = {
-                    "image_id": image_id,
-                    "index": index,
-                }
-                if output_path:
-                    completed["output_path"] = output_path
-                job = store.get(job_id) or job
-                store.append_event(job, "image_completed", completed)
-                success_count += 1
+                    _append_job_event(
+                        store,
+                        job_id,
+                        "image_completed",
+                        {"image_id": image_id, "index": index},
+                    )
+                    success_count += 1
             except Exception as exc:
                 error_count += 1
-                job = store.get(job_id) or job
-                store.append_event(
-                    job,
+                _append_job_event(
+                    store,
+                    job_id,
                     "image_failed",
                     {
                         "image_id": image_id,
@@ -302,20 +389,27 @@ def run_job(job_id: str, job_backend: Any, scratch_volume: Any | None = None) ->
                 print(f"image {image_id} failed: {exc}")
                 traceback.print_exc()
 
-        job = store.get(job_id) or job
-        store.append_event(
-            job,
+        persist_ok, persist_err = _wait_persist_results(persist_futures)
+        persist_futures.clear()
+        success_count += persist_ok
+        error_count += persist_err
+        _append_job_event(
+            store,
+            job_id,
             "job_completed",
             {"success_count": success_count, "error_count": error_count},
         )
         if wrote_volume and scratch_volume is not None:
             _commit_scratch_volume(scratch_volume)
     except Exception as exc:
-        job = store.get(job_id) or job
-        store.append_event(job, "job_failed", {"error": str(exc)})
+        _wait_persist_results(persist_futures)
+        persist_futures.clear()
+        _append_job_event(store, job_id, "job_failed", {"error": str(exc)})
         traceback.print_exc()
         if wrote_volume and scratch_volume is not None:
             _commit_scratch_volume(scratch_volume)
         raise
     finally:
+        if persist_pool is not None:
+            persist_pool.shutdown(wait=True)
         shutil.rmtree(work_dir, ignore_errors=True)
