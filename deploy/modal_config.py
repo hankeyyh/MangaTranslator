@@ -38,7 +38,8 @@ GPU_CONFIG = {
     "memory": 16384,
     "timeout": WORKER_TIMEOUT_SECONDS,
     "min_containers": 0,
-    "scaledown_window": 60,
+    # 空转 A10G 很贵；15s 够同一批连续页复用热容器，又不会在测完后挂满 1 分钟。
+    "scaledown_window": 15,
     "max_inputs": 1,
 }
 
@@ -92,6 +93,12 @@ WORKER_PIP_PACKAGES = GATEWAY_PIP_PACKAGES + [
     "ultralytics>=8.3.94",
 ]
 
+# CUDA kernel / inductor 缓存必须写本地盘。XDG_CACHE_HOME 若指到 Volume，
+# Torch 建 /app/models/cache/torch/kernels 会失败并禁用 kernel cache，每次冷启动重新 JIT。
+TORCH_KERNEL_CACHE = "/tmp/torch-kernels"
+TORCH_INDUCTOR_CACHE = "/tmp/torchinductor"
+TRITON_CACHE = "/tmp/triton"
+
 ENV_VARS = {
     "PYTHONPATH": APP_ROOT,
     "PYTHONUNBUFFERED": "1",
@@ -100,6 +107,9 @@ ENV_VARS = {
     "HF_HUB_CACHE": f"{MODEL_MOUNT_PATH}/huggingface",
     "TRANSFORMERS_CACHE": f"{MODEL_MOUNT_PATH}/transformers",
     "XDG_CACHE_HOME": f"{MODEL_MOUNT_PATH}/cache",
+    "PYTORCH_KERNEL_CACHE_PATH": TORCH_KERNEL_CACHE,
+    "TORCHINDUCTOR_CACHE_DIR": TORCH_INDUCTOR_CACHE,
+    "TRITON_CACHE_DIR": TRITON_CACHE,
     "MT_MODELS_DIR": MODEL_MOUNT_PATH,
     "YOLO_CONFIG_DIR": "/tmp",
     "CUDA_VISIBLE_DEVICES": "0",

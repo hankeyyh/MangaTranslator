@@ -97,7 +97,7 @@ worker_image = _add_service_code(
 )
 
 
-@app.function(
+@app.cls(
     image=worker_image,
     gpu=GPU_CONFIG["gpu"],
     cpu=GPU_CONFIG["cpu"],
@@ -105,32 +105,58 @@ worker_image = _add_service_code(
     timeout=GPU_CONFIG["timeout"],
     min_containers=GPU_CONFIG["min_containers"],
     scaledown_window=GPU_CONFIG["scaledown_window"],
+    enable_memory_snapshot=True,
     volumes={
         MODEL_MOUNT_PATH: model_volume,
         SCRATCH_MOUNT_PATH: scratch_volume,
     },
     secrets=function_secrets,
 )
-# For synchronous Functions, Modal will execute concurrent inputs on separate threads.
-# This means that the Function implementation must be thread-safe.
+# For synchronous Methods, Modal will execute concurrent inputs on separate threads.
+# This means that the implementation must be thread-safe.
 # doc: https://modal.com/docs/guide/concurrent-inputs#concurrency-mechanisms
 # 主流做法：在生产中，通常采用 “一个容器 → 一个推理进程 → 单线程执行推理” 的模式
 @modal.concurrent(max_inputs=GPU_CONFIG["max_inputs"])
-def process_job(job_id: str) -> None:
-    """
-    process_job不是普通python函数，而是modal function句柄。调用它会在云端开一个带A10G的容器跑这段代码。
-    process_job.remote(): 同步rpc，等gpu跑完
-    process_job.spawn(): 异步rpc，投递后立刻返回FunctionCall
-    process_job.local(): 本地进程直接跑
-    """
-    import os
-    import sys
+class JobWorker:
+    """GPU worker. Heavy CPU imports are snapshotted; CUDA is re-inited after restore."""
 
-    os.chdir(APP_ROOT)
-    sys.path.insert(0, APP_ROOT)
-    from deploy.api.worker import run_job
+    @modal.enter(snap=True)
+    def setup_cpu(self) -> None:
+        import os
+        import sys
 
-    run_job(job_id, job_dict, scratch_volume)
+        os.chdir(APP_ROOT)
+        sys.path.insert(0, APP_ROOT)
+        from deploy.api.worker import warmup_imports
+
+        warmup_imports()
+
+    @modal.enter(snap=False)
+    def setup_cuda(self) -> None:
+        import os
+        import sys
+
+        os.chdir(APP_ROOT)
+        sys.path.insert(0, APP_ROOT)
+        from deploy.api.worker import warmup_cuda
+
+        warmup_cuda()
+
+    @modal.method()
+    def process_job(self, job_id: str) -> None:
+        """
+        process_job 是 Modal method 句柄。调用它会在云端开一个带 A10G 的容器跑这段代码。
+        JobWorker().process_job.remote(): 同步 rpc，等 gpu 跑完
+        JobWorker().process_job.spawn(): 异步 rpc，投递后立刻返回 FunctionCall
+        """
+        import os
+        import sys
+
+        os.chdir(APP_ROOT)
+        sys.path.insert(0, APP_ROOT)
+        from deploy.api.worker import run_job
+
+        run_job(job_id, job_dict, scratch_volume)
 
 
 @app.function(
@@ -203,7 +229,7 @@ def list_volumes() -> dict:
 def web():
     """
     作为asgi网关，挂载fastapp。asgi+fastapp 跑在同一个进程。
-    fastapp 通过 process_job.spawn 句柄发起rpc调用，告知 modal 控制面，在云端开一个带A10G的容器执行具体任务
+    fastapp 通过 JobWorker().process_job.spawn 句柄发起 rpc，在云端开一个带 A10G 的容器执行具体任务
     """
     import sys
 
@@ -212,7 +238,7 @@ def web():
 
     return create_app(
         job_backend=job_dict,
-        spawn_job=process_job.spawn,
+        spawn_job=JobWorker().process_job.spawn,
         scratch_volume=scratch_volume,
     )
 

@@ -20,6 +20,9 @@ from deploy.modal_config import (
     FONTS_VOLUME_PATH,
     MODEL_MOUNT_PATH,
     SCRATCH_MOUNT_PATH,
+    TORCH_INDUCTOR_CACHE,
+    TORCH_KERNEL_CACHE,
+    TRITON_CACHE,
     WORK_DIR_ROOT,
 )
 
@@ -27,6 +30,36 @@ SCRATCH_SCHEME = "scratch:"
 WORK_ROOT = Path(WORK_DIR_ROOT)
 # process_job is @modal.concurrent: reload/commit/read/write share one Volume mount.
 _VOLUME_LOCK = threading.Lock()
+
+
+def warmup_imports() -> None:
+    """CPU work for @modal.enter(snap=True): imports + local kernel-cache dirs.
+
+    Must not touch the GPU. CPU memory snapshots cannot capture CUDA state.
+    """
+    for cache_dir in (TORCH_KERNEL_CACHE, TORCH_INDUCTOR_CACHE, TRITON_CACHE):
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+    import cv2  # noqa: F401
+    import numpy  # noqa: F401
+    import torch  # noqa: F401
+    import transformers  # noqa: F401
+    import ultralytics  # noqa: F401
+    from core.pipeline import translate_and_render  # noqa: F401
+
+    print(
+        f"Worker CPU stack imported (kernel_cache={TORCH_KERNEL_CACHE})",
+        flush=True,
+    )
+
+
+def warmup_cuda() -> None:
+    """GPU work for @modal.enter(snap=False): recreate CUDA context after restore."""
+    import torch
+
+    if torch.cuda.is_available():
+        torch.zeros(1, device="cuda")
+    print(f"Worker CUDA ready (cuda={torch.cuda.is_available()})", flush=True)
 
 
 def _worker_id() -> str:
