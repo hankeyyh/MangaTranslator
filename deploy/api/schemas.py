@@ -14,11 +14,15 @@ JobStatus = Literal["queued", "running", "completed", "failed"]
 
 class DetectionConfigIn(BaseModel):
     bubble_detector_model: str = "yolo_2"
+    use_panel_sorting: bool = True
 
 
 class OutsideTextConfigIn(BaseModel):
     enabled: bool = True
     inpainting_method: str = "lama_large"
+    lama_use_crf: bool = False
+    lama_detect_size: int = 1024
+    lama_inpainting_size: int = 1024
 
     @field_validator("inpainting_method")
     @classmethod

@@ -33,9 +33,9 @@ def build_mt_config(
 
     provider = str(config_in.get("provider") or "DeepSeek")
     sampling = get_provider_sampling_defaults(provider)
-    bubble_detector = str(
-        (config_in.get("detection") or {}).get("bubble_detector_model") or "yolo_2"
-    )
+    detection_in = config_in.get("detection") or {}
+    bubble_detector = str(detection_in.get("bubble_detector_model") or "yolo_2")
+    use_panel_sorting = bool(detection_in.get("use_panel_sorting", True))
     rendering_in = config_in.get("rendering") or {}
     rtl = bool(rendering_in.get("rtl", True))
     output_format = str(config_in.get("output_format") or "webp")
@@ -47,6 +47,9 @@ def build_mt_config(
     outside_in = config_in.get("outside_text") or {}
     outside_enabled = bool(outside_in.get("enabled", True))
     inpainting_method = str(outside_in.get("inpainting_method") or "lama_large")
+    lama_use_crf = bool(outside_in.get("lama_use_crf", False))
+    lama_detect_size = int(outside_in.get("lama_detect_size") or 1024)
+    lama_inpainting_size = int(outside_in.get("lama_inpainting_size") or 1024)
     if inpainting_method in {"flux_klein_9b", "flux_klein_4b", "flux_kontext"}:
         inpainting_method = "lama_large"
     test_mode = bool(config_in.get("test_mode", False))
@@ -57,6 +60,7 @@ def build_mt_config(
             bubble_detector_model=bubble_detector,
             # True：额外跑 YOLOv12x，把偏紧的气泡框扩到盖住漏字。现网 OSB 不走该模型，仅用于撑框成本过高，故关掉。
             use_osb_text_verification=False,
+            use_panel_sorting=use_panel_sorting,
         ),
         cleaning=CleaningConfig(),
         translation=TranslationConfig(
@@ -81,6 +85,9 @@ def build_mt_config(
             # False：YOLOv12x 全页检字后去掉气泡内结果；模型失败才回退 text_free。
             osb_text_free_only=True,
             huggingface_token=os.environ.get("HF_TOKEN") or "",
+            lama_use_crf=lama_use_crf,
+            lama_detect_size=lama_detect_size,  # DBNet：OSB crop 笔画 mask 推理最长边上限
+            lama_inpainting_size=lama_inpainting_size,  # LaMa：OSB 擦字 patch 推理最长边上限
         ),
         preprocessing=PreprocessingConfig(enabled=False),
         verbose=True,

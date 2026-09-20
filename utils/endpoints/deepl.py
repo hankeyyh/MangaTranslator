@@ -136,7 +136,7 @@ def _import_deepl():
 def call_deepl_endpoint(
     api_key: str,
     texts: list[str],
-    source_language: str,
+    source_language: str | None,
     target_language: str,
     context: str | None = None,
     previous_pages: list[list[str]] | None = None,
@@ -149,7 +149,8 @@ def call_deepl_endpoint(
     Args:
         api_key: DeepL auth key (Free keys typically end with ``:fx``).
         texts: Source strings in reading order. ``[OCR FAILED]`` is preserved.
-        source_language: UI language name (e.g. ``Japanese``).
+        source_language: UI language name (e.g. ``Japanese``). When empty or
+            ``None``, ``source_lang`` is omitted and DeepL auto-detects.
         target_language: UI language name (e.g. ``English``).
         context: Optional extra notes appended after page dialogue (DeepL
             ``context``; not translated, not billed).
@@ -168,7 +169,9 @@ def call_deepl_endpoint(
         return []
 
     deepl = _import_deepl()
-    source_lang = _to_deepl_source_lang(source_language)
+    source_lang: str | None = None
+    if (source_language or "").strip():
+        source_lang = _to_deepl_source_lang(source_language.strip())
     target_lang = _to_deepl_target_lang(target_language)
     translator = deepl.Translator(api_key)
 
@@ -190,9 +193,10 @@ def call_deepl_endpoint(
     if assembled_context:
         extra_kwargs["context"] = assembled_context
 
+    source_label = source_lang or "auto"
     log_message(
         f"DeepL translating {len(pending_indices)} segment(s) "
-        f"{source_lang} → {target_lang}",
+        f"{source_label} → {target_lang}",
         verbose=debug,
     )
     if assembled_context:
@@ -231,7 +235,7 @@ def call_deepl_endpoint(
 def _translate_chunk(
     translator: Any,
     chunk_texts: list[str],
-    source_lang: str,
+    source_lang: str | None,
     target_lang: str,
     extra_kwargs: dict[str, Any],
     debug: bool,
@@ -248,12 +252,13 @@ def _translate_chunk(
                 f"DeepL API request (attempt {attempt + 1}/{max_retries + 1})",
                 verbose=debug,
             )
-            response = translator.translate_text(
-                chunk_texts,
-                source_lang=source_lang,
-                target_lang=target_lang,
+            translate_kwargs: dict[str, Any] = {
+                "target_lang": target_lang,
                 **extra_kwargs,
-            )
+            }
+            if source_lang is not None:
+                translate_kwargs["source_lang"] = source_lang
+            response = translator.translate_text(chunk_texts, **translate_kwargs)
             if not isinstance(response, list):
                 response = [response]
             return [item.text for item in response]
