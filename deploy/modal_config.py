@@ -38,8 +38,8 @@ GPU_CONFIG = {
     "memory": 16384,
     "timeout": WORKER_TIMEOUT_SECONDS,
     "min_containers": 0,
-    # 空转 A10G 很贵；15s 够同一批连续页复用热容器，又不会在测完后挂满 1 分钟。
-    "scaledown_window": 15,
+    # 空转 A10G 很贵；2s 够同一批连续页复用热容器，又不会在测完后挂满 1 分钟。
+    "scaledown_window": 2,
     "max_inputs": 1,
 }
 
