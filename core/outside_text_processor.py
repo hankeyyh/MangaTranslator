@@ -20,7 +20,7 @@ from core.batch_coordinator import (
 )
 from core.config import MangaTranslatorConfig
 from core.image.image_utils import cv2_to_pil, pil_to_cv2, process_bubble_image_cached
-from core.image.inpainting import FluxKleinInpainter, FluxKontextInpainter
+from core.image.inpainting import create_inpainter
 from core.image.ocr_detection import OutsideTextDetector, extract_text_with_manga_ocr
 from core.ml.model_manager import get_model_manager
 from utils.logging import log_message
@@ -214,6 +214,15 @@ def _apply_inpaint_render_metadata(
         item["needs_text_background"] = needs_text_bg
 
 
+def _lama_mask_dump_dir(output_path: str | Path | None) -> Path:
+    """Put stroke-debug PNGs under the translation output directory."""
+    if output_path is None:
+        return Path("output") / "lama_mask_debug"
+    dest = Path(output_path)
+    base = dest.parent if dest.suffix else dest
+    return base / "lama_mask_debug"
+
+
 def prepare_outside_text_work(
     pil_image: Image.Image,
     config: MangaTranslatorConfig,
@@ -223,6 +232,7 @@ def prepare_outside_text_work(
     bubble_data: list[dict[str, Any]] | None = None,
     text_free_boxes: list[list[float]] | None = None,
     panels: list[tuple[int, int, int, int]] | None = None,
+    output_path: str | Path | None = None,
 ) -> OutsideTextWork | None:
     """Detect outside text and build translation crops without inpainting."""
     if not config.outside_text.enabled:
@@ -585,6 +595,10 @@ def prepare_outside_text_work(
                 verbose=verbose,
             )
 
+        use_dbnet_mask = (
+            config.outside_text.inpainting_method == "lama_large"
+            and bool(getattr(config.outside_text, "lama_use_dbnet_mask", True))
+        )
         mask_groups, _ = outside_detector.get_text_masks(
             str(image_path),
             bbox_expansion_percent_width=config.outside_text.bbox_expansion_percent_width,
@@ -593,7 +607,31 @@ def prepare_outside_text_work(
             verbose=verbose,
             image_override=pil_image,
             existing_results=raw_outside_text_results,
+            stroke_source="dbnet" if use_dbnet_mask else None,
+            stroke_detect_size=int(
+                getattr(config.outside_text, "lama_detect_size", 2048)
+            ),
+            stroke_dilation_offset=int(
+                getattr(config.outside_text, "lama_mask_dilation_offset", 15)
+            ),
+            stroke_kernel_size=int(
+                getattr(config.outside_text, "lama_kernel_size", 3)
+            ),
+            stroke_use_crf=bool(getattr(config.outside_text, "lama_use_crf", True)),
+            stroke_max_dilate=int(
+                getattr(config.outside_text, "lama_mask_max_dilation", 15)
+            ),
+            stroke_dump_dir=(
+                str(_lama_mask_dump_dir(output_path))
+                if bool(getattr(config.outside_text, "lama_dump_masks", False))
+                else None
+            ),
         )
+        if use_dbnet_mask:
+            try:
+                get_model_manager().unload_dbnet(verbose=verbose)
+            except Exception:
+                pass
 
         outside_text_data = _build_outside_text_data(
             pil_image=pil_image,
@@ -661,103 +699,43 @@ def finish_outside_text_work(
         # Create inpainter based on selected method
         inpainting_method = config.outside_text.inpainting_method
         inpainter = None
-        if inpainting_method == "flux_klein_9b":
-            try:
-                backend = config.outside_text.flux_backend
-                inpainter = FluxKleinInpainter(
-                    variant="9b",
-                    device=config.device,
-                    huggingface_token=config.outside_text.huggingface_token,
-                    num_inference_steps=config.outside_text.flux_num_inference_steps,
-                    low_vram=config.outside_text.flux_low_vram,
-                    luminance_correction=config.outside_text.flux_luminance_correction,
-                    upscale_small_crops=config.outside_text.flux_upscale_small_crops,
-                    backend=backend,
-                    sdcpp_cache_mode=config.outside_text.flux_sdcpp_cache_mode,
-                    sdcpp_diffusion_quant=config.outside_text.flux_sdcpp_diffusion_quant,
-                    sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
-                    verbose=verbose,
-                )
-                backend_label = "sd.cpp" if backend == "sdcpp" else "SDNQ"
-                log_message(
-                    f"Using Flux.2 Klein 9B ({backend_label}) for inpainting",
-                    verbose=verbose,
-                )
-            except Exception as e:
-                log_message(
-                    f"Flux Klein 9B unavailable ({e}), falling back to OpenCV",
-                    verbose=verbose,
-                )
-
-        if inpainting_method == "flux_klein_4b":
-            try:
-                backend = config.outside_text.flux_backend
-                inpainter = FluxKleinInpainter(
-                    variant="4b",
-                    device=config.device,
-                    huggingface_token=config.outside_text.huggingface_token,
-                    num_inference_steps=config.outside_text.flux_num_inference_steps,
-                    low_vram=config.outside_text.flux_low_vram,
-                    luminance_correction=config.outside_text.flux_luminance_correction,
-                    upscale_small_crops=config.outside_text.flux_upscale_small_crops,
-                    backend=backend,
-                    sdcpp_cache_mode=config.outside_text.flux_sdcpp_cache_mode,
-                    sdcpp_diffusion_quant=config.outside_text.flux_sdcpp_diffusion_quant,
-                    sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
-                    verbose=verbose,
-                )
-                backend_label = "sd.cpp" if backend == "sdcpp" else "SDNQ"
-                log_message(
-                    f"Using Flux.2 Klein 4B ({backend_label}) for inpainting",
-                    verbose=verbose,
-                )
-            except Exception as e:
-                log_message(
-                    f"Flux Klein 4B unavailable ({e}), falling back to OpenCV",
-                    verbose=verbose,
-                )
-
-        if inpainting_method == "flux_kontext":
-            try:
-                backend = config.outside_text.flux_backend
-                low_vram = (
-                    config.outside_text.flux_low_vram if backend == "sdnq" else False
-                )
-                inpainter = FluxKontextInpainter(
-                    device=config.device,
-                    huggingface_token=config.outside_text.huggingface_token,
-                    num_inference_steps=config.outside_text.flux_num_inference_steps,
-                    residual_diff_threshold=config.outside_text.flux_residual_diff_threshold,
-                    backend=backend,
-                    low_vram=low_vram,
-                    sdcpp_cache_mode=config.outside_text.flux_sdcpp_cache_mode,
-                    sdcpp_diffusion_quant=config.outside_text.flux_sdcpp_diffusion_quant,
-                    sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
-                )
-                backend_label = {
-                    "sdnq": "SDNQ",
-                    "sdcpp": "sd.cpp",
-                    "nunchaku": "Nunchaku",
-                }[backend]
-                log_message(
-                    f"Using Flux.1 Kontext ({backend_label}) for inpainting",
-                    verbose=verbose,
-                )
-            except Exception as e:
-                log_message(
-                    f"Flux Kontext unavailable ({e}), falling back to OpenCV",
-                    verbose=verbose,
-                )
-
         if inpainting_method == "none":
-            inpainter = None
             log_message(
                 "Using text background mode (no inpainting for non-solid regions)",
                 verbose=verbose,
             )
-        elif inpainting_method == "opencv" or inpainter is None:
-            inpainter = None
+        elif inpainting_method == "opencv":
             log_message("Using OpenCV simple fill for inpainting", verbose=verbose)
+        else:
+            try:
+                inpainter = create_inpainter(
+                    inpainting_method,
+                    device=config.device,
+                    huggingface_token=config.outside_text.huggingface_token,
+                    flux_backend=config.outside_text.flux_backend,
+                    flux_low_vram=config.outside_text.flux_low_vram,
+                    flux_num_inference_steps=config.outside_text.flux_num_inference_steps,
+                    flux_residual_diff_threshold=config.outside_text.flux_residual_diff_threshold,
+                    flux_luminance_correction=config.outside_text.flux_luminance_correction,
+                    flux_upscale_small_crops=config.outside_text.flux_upscale_small_crops,
+                    flux_sdcpp_cache_mode=config.outside_text.flux_sdcpp_cache_mode,
+                    flux_sdcpp_diffusion_quant=config.outside_text.flux_sdcpp_diffusion_quant,
+                    flux_sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
+                    lama_inpainting_size=config.outside_text.lama_inpainting_size,
+                    verbose=verbose,
+                )
+                log_message(
+                    f"Using {inpainting_method} for inpainting",
+                    verbose=verbose,
+                )
+            except Exception as e:
+                inpainter = None
+                log_message(
+                    f"Inpainter unavailable ({e}), falling back to OpenCV",
+                    verbose=verbose,
+                )
+            if inpainter is None:
+                log_message("Using OpenCV simple fill for inpainting", verbose=verbose)
         current_image = pil_image
         temp_files = []
         none_skipped_clip_bboxes = set()
@@ -771,12 +749,15 @@ def finish_outside_text_work(
 
                 extracted_text_colors = {}
                 flux_inpaints = 0
+                lama_inpaints = 0
                 cv2_inpaints = 0
                 none_skips = 0
                 group_flux_regions = bool(config.outside_text.flux_group_regions)
                 grouped_flux_candidates = []
                 request_coordinator = getattr(config, "request_coordinator", None)
                 pending_flux_candidates = []
+                lama_full_masks = []
+                is_lama_full = inpainting_method == "lama_large" and inpainter is not None
 
                 def apply_candidate_simple_fill(candidate, color_to_use):
                     new_img = current_image.copy()
@@ -901,7 +882,7 @@ def finish_outside_text_work(
                                     )
                                     if result_image is image_for_job:
                                         raise RuntimeError(
-                                            "Flux returned original image (no inpaint)"
+                                            "Inpainter returned original image (no inpaint)"
                                         )
                                     return {
                                         "candidate": candidate,
@@ -925,8 +906,8 @@ def finish_outside_text_work(
                             if result["error"] is not None:
                                 fallback_color_to_use = candidate["fallback_color"]
                                 log_message(
-                                    f"Flux failed for OSB region {candidate['index']}"
-                                    f" (Flux inpainting error: {result['error']}); "
+                                    f"Inpainting failed for OSB region {candidate['index']}"
+                                    f" (inpainting error: {result['error']}); "
                                     f"falling back to CV2 fill ({fallback_color_to_use})",
                                     always_print=True,
                                 )
@@ -1460,6 +1441,14 @@ def finish_outside_text_work(
                         )
                         continue
 
+                    if is_lama_full:
+                        lama_full_masks.append(combined_mask)
+                        log_message(
+                            f"Queued OSB region {i + 1} for full-page LaMa",
+                            verbose=verbose,
+                        )
+                        continue
+
                     if group_flux_regions and inpainter is not None:
                         flush_pending_flux_candidates()
                         grouped_mask = combined_mask.copy()
@@ -1534,7 +1523,7 @@ def finish_outside_text_work(
 
                     if inpainter is None:
                         flux_failed = True
-                        flux_fail_reason = "Flux inpainter unavailable"
+                        flux_fail_reason = "Inpainter unavailable"
                     else:
                         try:
                             inpainted_image = inpainter.inpaint_mask(
@@ -1548,11 +1537,11 @@ def finish_outside_text_work(
                             if inpainted_image is current_image:
                                 flux_failed = True
                                 flux_fail_reason = (
-                                    "Flux returned original image (no inpaint)"
+                                    "Inpainter returned original image (no inpaint)"
                                 )
                         except Exception as e:
                             flux_failed = True
-                            flux_fail_reason = f"Flux inpainting error: {e}"
+                            flux_fail_reason = f"Inpainting error: {e}"
 
                     if flux_failed:
                         fallback_color_to_use = (
@@ -1561,7 +1550,7 @@ def finish_outside_text_work(
                             else (255, 255, 255)
                         )
                         log_message(
-                            f"Flux failed for OSB region {i + 1}"
+                            f"Inpainting failed for OSB region {i + 1}"
                             + (f" ({flux_fail_reason})" if flux_fail_reason else "")
                             + f"; falling back to CV2 fill ({fallback_color_to_use})",
                             always_print=True,
@@ -1605,6 +1594,62 @@ def finish_outside_text_work(
 
                 flush_pending_flux_candidates()
 
+                if is_lama_full and lama_full_masks:
+                    full_mask = np.logical_or.reduce(lama_full_masks)
+                    if np.any(full_mask):
+                        log_message(
+                            "Running full-page LaMa for "
+                            f"{len(lama_full_masks)} OSB region(s)",
+                            verbose=verbose,
+                        )
+                        try:
+                            inpaint_kwargs = {
+                                "seed": base_seed,
+                                "verbose": verbose,
+                                "ocr_params": {
+                                    "type": "outside_text_lama_full",
+                                    "regions": len(lama_full_masks),
+                                },
+                            }
+                            if request_coordinator is not None:
+                                inpainted_image = request_coordinator.run(
+                                    inpainter.inpaint_full,
+                                    current_image,
+                                    full_mask,
+                                    **inpaint_kwargs,
+                                )
+                            else:
+                                inpainted_image = inpainter.inpaint_full(
+                                    current_image,
+                                    full_mask,
+                                    **inpaint_kwargs,
+                                )
+                            if inpainted_image is current_image:
+                                raise RuntimeError(
+                                    "Inpainter returned original image (no inpaint)"
+                                )
+                            current_image = inpainted_image
+                            lama_inpaints += len(lama_full_masks)
+                        except Exception as e:
+                            log_message(
+                                f"Full-page LaMa failed ({e}); falling back to CV2 fill",
+                                always_print=True,
+                            )
+                            for region_mask in lama_full_masks:
+                                mask_pil = Image.fromarray(
+                                    (region_mask * 255).astype(np.uint8),
+                                    mode="L",
+                                )
+                                patch = Image.new(
+                                    "RGB",
+                                    current_image.size,
+                                    (255, 255, 255),
+                                )
+                                next_image = current_image.copy()
+                                next_image.paste(patch, (0, 0), mask=mask_pil)
+                                current_image = next_image
+                            cv2_inpaints += len(lama_full_masks)
+
                 if grouped_flux_candidates:
                     grouped_mask = np.zeros((img_h, img_w), dtype=bool)
                     for candidate in grouped_flux_candidates:
@@ -1642,13 +1687,13 @@ def finish_outside_text_work(
                                 )
                             if inpainted_image is current_image:
                                 raise RuntimeError(
-                                    "Flux returned original image (no inpaint)"
+                                    "Inpainter returned original image (no inpaint)"
                                 )
                             current_image = inpainted_image
                             flux_inpaints += len(grouped_flux_candidates)
                         except Exception as e:
                             log_message(
-                                "Grouped Flux inpainting failed "
+                                "Grouped inpainting failed "
                                 f"({e}); falling back to CV2 fill",
                                 always_print=True,
                             )
@@ -1670,6 +1715,7 @@ def finish_outside_text_work(
                 log_message("Outside text inpainting completed", verbose=verbose)
                 parts = [
                     f"Flux: {flux_inpaints}",
+                    f"LaMa: {lama_inpaints}",
                     f"CV2: {cv2_inpaints}",
                 ]
                 if none_skips:
@@ -1710,6 +1756,7 @@ def process_outside_text(
     bubble_data: list[dict[str, Any]] | None = None,
     text_free_boxes: list[list[float]] | None = None,
     panels: list[tuple[int, int, int, int]] | None = None,
+    output_path: str | Path | None = None,
 ) -> tuple[Image.Image, list[dict[str, Any]]]:
     """
     Process outside text detection, inpainting, and prepare data for translation.
@@ -1741,6 +1788,7 @@ def process_outside_text(
         bubble_data=bubble_data,
         text_free_boxes=text_free_boxes,
         panels=panels,
+        output_path=output_path,
     )
     if work is None:
         return pil_image, []

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import base64
 import math
@@ -17,21 +19,19 @@ from PIL import Image, ImageDraw, ImageFont
 
 from core.batch_coordinator import BatchRequestCoordinator
 from core.caching import get_cache
-from core.config import MangaTranslatorConfig, PreprocessingConfig, RenderingConfig
-from core.scaling import scale_font_size, scale_length, scale_scalar
+from core.config import MangaTranslatorConfig, PreprocessingConfig
+from core.scaling import scale_length
 from core.validation import validate_config
 from utils.exceptions import (
     CancellationError,
     CleaningError,
-    FontError,
     ImageProcessingError,
-    RenderingError,
     TranslationError,
 )
 from utils.logging import log_message
 from utils.path_list import resolve_source_path, write_failed_paths
 
-from .image.cleaning import clean_speech_bubbles, retry_cleaning_with_otsu
+from .image.cleaning import clean_speech_bubbles
 from .image.detection import detect_panels, detect_speech_bubbles
 from .image.image_utils import (
     convert_image_to_target_mode,
@@ -54,8 +54,16 @@ from .services.translation import (
     prepare_bubble_images_for_translation,
 )
 from .text.placeholders import generate_test_placeholders
-from .text.text_processing import supports_long_word_breaking
-from .text.text_renderer import render_text_skia
+from .text.region_render import (
+    BubbleRetryContext,
+    render_bubble_text,
+    render_outside_text,
+)
+from .text.region_visual import build_bubble_region, build_osb_region
+from .text.rendering_config import (
+    build_bubble_rendering_config,
+    build_osb_rendering_config,
+)
 
 if TYPE_CHECKING:
     from ui.cancellation import CancellationManager
@@ -88,7 +96,7 @@ def _clean_speech_bubbles_for_page(
         use_otsu = config.cleaning.use_otsu_threshold
         if config.cleaning.inpaint_colored_bubbles:
             log_message(
-                "Flux inpainting enabled for colored bubbles",
+                "Model inpainting enabled for colored bubbles",
                 verbose=verbose,
             )
 
@@ -119,6 +127,7 @@ def _clean_speech_bubbles_for_page(
             flux_sdcpp_text_encoder_quant=config.outside_text.flux_sdcpp_text_encoder_quant,
             flux_luminance_correction=config.outside_text.flux_luminance_correction,
             flux_upscale_small_crops=config.outside_text.flux_upscale_small_crops,
+            lama_inpainting_size=config.outside_text.lama_inpainting_size,
             bubble_detector_model=config.detection.bubble_detector_model,
             request_coordinator=getattr(config, "request_coordinator", None),
         )
@@ -297,7 +306,7 @@ def _get_cached_previous_context_image(
     image_path: Path,
     config: MangaTranslatorConfig,
     context_cache: OrderedDict | None,
-    context_cache_lock: threading.Lock | None,
+    context_cache_lock: Optional[threading.Lock],
 ) -> dict[str, str] | None:
     verbose = config.verbose
     if context_cache is None:
@@ -333,7 +342,7 @@ def _build_previous_context_images(
     image_index: int,
     config: MangaTranslatorConfig,
     context_cache: OrderedDict | None = None,
-    context_cache_lock: threading.Lock | None = None,
+    context_cache_lock: Optional[threading.Lock] = None,
 ) -> list[dict[str, str]]:
     if not getattr(config.translation, "send_full_page_context", False):
         return []
@@ -366,7 +375,7 @@ def _build_previous_context_texts(
     image_index: int,
     config: MangaTranslatorConfig,
     ocr_text_history: dict[Path, list[str]] | None = None,
-    ocr_text_history_lock: threading.Lock | None = None,
+    ocr_text_history_lock: Optional[threading.Lock] = None,
 ) -> list[list[str]]:
     """Collect OCR transcripts from up to N already-processed prior pages.
 
@@ -664,6 +673,25 @@ def translate_and_render(
 
     Returns:
         PIL.Image: Final translated image
+
+    核心流程:
+    检测
+        - YOLO 气泡 box 检测
+        - RT-DETR-v2 气泡外文本 (text_free) box 检测
+    确定分镜顺序
+        - 供后续阅读顺序与翻译语境使用
+        - 输出: list[tuple[int, int, int, int]]
+    处理 OSB 文本（气泡外）
+        - OCR 识别原文
+        - inpaint 擦除原文（默认 lama_large)
+    清空气泡区域
+        - 纯色填充，为渲染译文腾出空白
+    翻译文本排序
+        - 分镜顺序 + 气泡阅读顺序，保持语境
+    LLM 翻译
+        - 按排序后的气泡/OSB 批量翻译
+    渲染
+        - 将译文写回已清空的气泡 / OSB 区域
     """
     start_time = time.time()
     validate_config(config)
@@ -777,7 +805,7 @@ def translate_and_render(
     original_cv_image = pil_to_cv2(pil_image_processed)
     full_page_context_source = pil_image_processed.copy()
 
-    # Detect speech bubbles first so OSB processing can respect bubble regions
+    # 1. Detect speech bubbles first so OSB processing can respect bubble regions
     log_message("Detecting speech bubbles...", verbose=verbose)
     try:
         bubble_data, text_free_boxes = detect_speech_bubbles(
@@ -800,6 +828,7 @@ def translate_and_render(
         bubble_data = []
         text_free_boxes = []
 
+    # 2. 检查分镜，用于后续根据分镜+气泡顺序排序，保持翻译语境
     panels = None
     debug_panels = None
     if config.detection.use_panel_sorting or ENABLE_COMPONENT_ORDER_DEBUG:
@@ -834,7 +863,7 @@ def translate_and_render(
         if config.detection.use_panel_sorting:
             panels = debug_panels
 
-    # Process outside text (detect always; optionally defer inpainting for LLM overlap)
+    # 3. Process outside text (detect always; optionally defer inpainting for LLM overlap)
     use_llm_inpaint_overlap = _should_overlap_llm_with_inpaint(config)
     outside_work = None
     if use_llm_inpaint_overlap:
@@ -847,6 +876,7 @@ def translate_and_render(
             bubble_data=bubble_data,
             text_free_boxes=text_free_boxes,
             panels=panels,
+            output_path=output_path,
         )
         outside_text_data = (
             outside_work.outside_text_data if outside_work is not None else []
@@ -854,6 +884,7 @@ def translate_and_render(
         # Bubble/OSB LLM crops use the pre-inpaint page image
         original_cv_image = pil_to_cv2(pil_image_processed)
     else:
+        # ocr, inpaint
         pil_image_processed, outside_text_data = process_outside_text(
             pil_image_processed,
             config,
@@ -863,6 +894,7 @@ def translate_and_render(
             bubble_data=bubble_data,
             text_free_boxes=text_free_boxes,
             panels=panels,
+            output_path=output_path,
         )
         original_cv_image = pil_to_cv2(pil_image_processed)
 
@@ -956,6 +988,7 @@ def translate_and_render(
         if cancellation_manager and cancellation_manager.is_cancelled():
             raise CancellationError("Process cancelled by user.")
 
+        # 3. 清空气泡区域
         processed_bubbles_info: list[dict[str, Any]] = []
         pil_cleaned_image = pil_image_processed
         if not use_llm_inpaint_overlap:
@@ -996,45 +1029,10 @@ def translate_and_render(
         if config.cleaning_only:
             log_message("Cleaning only mode - skipping translation", always_print=True)
         else:
-            main_min_font = scale_font_size(
-                config.rendering.min_font_size, processing_scale, minimum=4, maximum=256
+            bubble_render_config = build_bubble_rendering_config(
+                config, processing_scale
             )
-            main_max_font = scale_font_size(
-                config.rendering.max_font_size,
-                processing_scale,
-                minimum=main_min_font,
-                maximum=384,
-            )
-            padding_pixels = scale_scalar(
-                config.rendering.padding_pixels,
-                processing_scale,
-                minimum=1.0,
-                maximum=80.0,
-            )
-            osb_padding_pixels = scale_scalar(
-                config.outside_text.osb_padding_pixels,
-                processing_scale,
-                minimum=1.0,
-                maximum=80.0,
-            )
-            osb_min_font = scale_font_size(
-                config.outside_text.osb_min_font_size,
-                processing_scale,
-                minimum=4,
-                maximum=512,
-            )
-            osb_max_font = scale_font_size(
-                config.outside_text.osb_max_font_size,
-                processing_scale,
-                minimum=osb_min_font,
-                maximum=640,
-            )
-            osb_outline_width = scale_scalar(
-                config.outside_text.osb_outline_width,
-                processing_scale,
-                minimum=0.0,
-                maximum=24.0,
-            )
+            osb_render_config = build_osb_rendering_config(config, processing_scale)
             # Prepare images for Translation
             log_message("Preparing bubble images...", verbose=verbose)
 
@@ -1211,7 +1209,7 @@ def translate_and_render(
                         )
                         panels = None
 
-                # Sort all text elements (speech bubbles + OSB text) by reading order
+                # 4. Sort all text elements (speech bubbles + OSB text) by reading order
                 sorted_bubble_data = sort_bubbles_by_reading_order(
                     all_text_data, reading_direction, panels=panels
                 )
@@ -1277,6 +1275,8 @@ def translate_and_render(
                     for bubble in sorted_bubble_data
                     if "image_b64" in bubble and "mime_type" in bubble
                 ]
+
+                # 5. Translation
                 translated_texts = []
                 current_ocr_texts: list[str] = []
                 _provider_tag = f"[{config.translation.provider}:"
@@ -1373,14 +1373,8 @@ def translate_and_render(
                         translated_texts = generate_test_placeholders(
                             sorted_bubble_data=sorted_bubble_data,
                             processed_bubbles_info=processed_bubbles_info,
-                            config=config,
-                            main_min_font=main_min_font,
-                            main_max_font=main_max_font,
-                            osb_min_font=osb_min_font,
-                            osb_max_font=osb_max_font,
-                            padding_pixels=padding_pixels,
-                            osb_padding_pixels=osb_padding_pixels,
-                            osb_outline_width=osb_outline_width,
+                            bubble_render_config=bubble_render_config,
+                            osb_render_config=osb_render_config,
                             verbose=verbose,
                         )
                     elif use_llm_inpaint_overlap:
@@ -1531,7 +1525,7 @@ def translate_and_render(
                             verbose=verbose,
                         )
 
-                # Render Translations
+                # 6. Render Translations
                 bubble_render_info_map = {
                     tuple(info["bbox"]): {
                         "color": info["color"],
@@ -1577,411 +1571,41 @@ def translate_and_render(
                             continue
 
                         if is_outside_text:
-                            ocr_text = (bubble.get("ocr_text") or "").strip()
-                            if (
-                                ocr_text
-                                and ocr_text not in invalid_translation_values
-                                and ocr_text == text.strip()
-                                and "original_crop_pil" in bubble
-                            ):
-                                log_message(
-                                    "Restoring original OSB patch because OCR matches translation "
-                                    f"for {bbox}",
-                                    verbose=verbose,
-                                    always_print=True,
-                                )
-                                rendered_image = pil_cleaned_image.copy()
-                                original_patch = bubble["original_crop_pil"]
-                                rendered_image.paste(original_patch, (bbox[0], bbox[1]))
-                                pil_cleaned_image = rendered_image
-                                final_image_to_save = pil_cleaned_image
-                                continue
-
-                            text = text.upper()
-                            bubble["translation"] = text
-
-                        # Use OSB-specific settings for outside text, regular settings for speech bubbles
-                        if is_outside_text:
-                            log_message(
-                                f"Rendering outside text {bbox}: '{text[:30]}...'",
+                            result = render_outside_text(
+                                pil_cleaned_image,
+                                text,
+                                bbox,
+                                build_osb_region(bubble),
+                                osb_render_config,
+                                original_crop=bubble.get("original_crop_pil"),
+                                ocr_text=bubble.get("ocr_text") or "",
                                 verbose=verbose,
+                                region_id=str(i + 1),
                             )
-                            font_dir = (
-                                config.outside_text.osb_font_dir
-                                if config.outside_text.osb_font_dir
-                                else config.rendering.font_dir
-                            )
-                            min_font = osb_min_font
-                            max_font = osb_max_font
-                            line_spacing = config.outside_text.osb_line_spacing
-                            use_ligs = config.outside_text.osb_use_ligatures
-                            # Outside text was inpainted, no mask needed
-                            cleaned_mask = None
-                            is_dark_text = bubble.get("is_dark_text", True)
-                            text_color_rgb = bubble.get("text_color_rgb", None)
-                            bubble_color_bgr = (
-                                (50, 50, 50) if is_dark_text else (255, 255, 255)
-                            )
-                            # OSB renders default to horizontal; vertical stacking is fallback-only
-                            rotation_deg = 0.0
-                            vertical_stack = False
-
-                            text_bg_rgb = None
-                            if bubble.get("needs_text_background"):
-                                if text_color_rgb:
-                                    lum = (
-                                        0.299 * text_color_rgb[0]
-                                        + 0.587 * text_color_rgb[1]
-                                        + 0.114 * text_color_rgb[2]
-                                    )
-                                    text_bg_rgb = (
-                                        (255, 255, 255) if lum < 128 else (0, 0, 0)
-                                    )
-                                else:
-                                    text_bg_rgb = (
-                                        (0, 0, 0) if is_dark_text else (255, 255, 255)
-                                    )
+                            if result.text is not None:
+                                bubble["translation"] = result.text
                         else:
-                            log_message(
-                                f"Rendering bubble {bbox}: '{text[:30]}...'",
-                                verbose=verbose,
-                            )
-                            font_dir = config.rendering.font_dir
-                            min_font = main_min_font
-                            max_font = main_max_font
-                            line_spacing = config.rendering.line_spacing_mult
-                            use_ligs = config.rendering.use_ligatures
                             render_info = bubble_render_info_map.get(tuple(bbox))
-                            bubble_color_bgr = (255, 255, 255)
-                            cleaned_mask = None
-                            base_mask = None
-                            is_sam_mask = False
-                            text_color_rgb = None
-                            if render_info:
-                                bubble_color_bgr = render_info["color"]
-                                cleaned_mask = render_info.get("mask")
-                                base_mask = render_info.get("base_mask")
-                                is_sam_mask = render_info.get("is_sam", False)
-                                text_color_bgr_val = render_info.get("text_color_bgr")
-                                if text_color_bgr_val:
-                                    text_color_rgb = (
-                                        text_color_bgr_val[2],
-                                        text_color_bgr_val[1],
-                                        text_color_bgr_val[0],
-                                    )
-                            # No rotation/stacking for regular bubbles
-                            vertical_stack = False
-                            rotation_deg = 0.0
+                            result = render_bubble_text(
+                                pil_cleaned_image,
+                                text,
+                                bbox,
+                                build_bubble_region(bubble, render_info),
+                                bubble_render_config,
+                                retry=BubbleRetryContext(
+                                    original_cv_image=original_cv_image,
+                                    render_info=render_info,
+                                    thresholding_value=config.cleaning.thresholding_value,
+                                    roi_shrink_px=config.cleaning.roi_shrink_px,
+                                    processing_scale=processing_scale,
+                                    classify_colored=config.cleaning.inpaint_colored_bubbles,
+                                ),
+                                verbose=verbose,
+                                region_id=str(i + 1),
+                            )
 
-                        # Latin languages use hyphenation; Korean/Thai use
-                        # no-hyphen emergency breaks under the same user setting.
-                        should_hyphenate = config.rendering.hyphenate_before_scaling
-                        if not supports_long_word_breaking(
-                            config.translation.output_language
-                        ):
-                            should_hyphenate = False
-
-                        render_config = RenderingConfig(
-                            min_font_size=min_font,
-                            max_font_size=max_font,
-                            line_spacing_mult=line_spacing,
-                            use_subpixel_rendering=(
-                                config.outside_text.osb_use_subpixel_rendering
-                                if is_outside_text
-                                else config.rendering.use_subpixel_rendering
-                            ),
-                            font_hinting=(
-                                config.outside_text.osb_font_hinting
-                                if is_outside_text
-                                else config.rendering.font_hinting
-                            ),
-                            use_ligatures=use_ligs,
-                            hyphenate_before_scaling=should_hyphenate,
-                            hyphen_penalty=config.rendering.hyphen_penalty,
-                            hyphenation_min_word_length=config.rendering.hyphenation_min_word_length,
-                            badness_exponent=config.rendering.badness_exponent,
-                            padding_pixels=(
-                                osb_padding_pixels
-                                if is_outside_text
-                                else padding_pixels
-                            ),
-                            outline_width=(
-                                osb_outline_width if is_outside_text else 0.0
-                            ),
-                            supersampling_factor=config.rendering.supersampling_factor,
-                            detach_trailing_punctuation=(
-                                config.rendering.detach_trailing_punctuation
-                            ),
-                            auto_vertical_text=(
-                                config.outside_text.osb_auto_vertical_text
-                                if is_outside_text
-                                else config.rendering.auto_vertical_text
-                            ),
-                            vertical_line_spacing_mult=(
-                                config.outside_text.osb_vertical_line_spacing_mult
-                                if is_outside_text
-                                else config.rendering.vertical_line_spacing_mult
-                            ),
-                            vertical_font_size_mult=(
-                                config.outside_text.osb_vertical_font_size_mult
-                                if is_outside_text
-                                else config.rendering.vertical_font_size_mult
-                            ),
-                        )
-                        success = False
-                        if is_outside_text:
-                            try:
-                                rendered_image = render_text_skia(
-                                    pil_image=pil_cleaned_image,
-                                    text=text,
-                                    bbox=bbox,
-                                    font_dir=font_dir,
-                                    cleaned_mask=cleaned_mask,
-                                    bubble_color_bgr=bubble_color_bgr,
-                                    config=render_config,
-                                    verbose=verbose,
-                                    bubble_id=str(i + 1),
-                                    rotation_deg=rotation_deg,
-                                    vertical_stack=vertical_stack,
-                                    text_color_rgb=text_color_rgb,
-                                    raise_on_safe_error=False,
-                                    text_background_color=text_bg_rgb,
-                                    fallback_padding_pixels=osb_padding_pixels,
-                                )
-                                success = True
-                            except Exception as e:
-                                log_message(
-                                    f"Text rendering failed: {e}", verbose=verbose
-                                )
-                                rendered_image = pil_cleaned_image
-                                success = False
-
-                                # Absolute last-chance fallback: force vertical stacking before giving up
-                                if not vertical_stack:
-                                    # Fallback uses neutral rotation since we no longer track orientation
-                                    forced_stack_rotation = 0.0
-                                    try:
-                                        log_message(
-                                            "OSB render failed, retrying with vertical-stack fallback",
-                                            verbose=verbose,
-                                        )
-                                        rendered_image = render_text_skia(
-                                            pil_image=pil_cleaned_image,
-                                            text=text,
-                                            bbox=bbox,
-                                            font_dir=font_dir,
-                                            cleaned_mask=cleaned_mask,
-                                            bubble_color_bgr=bubble_color_bgr,
-                                            config=render_config,
-                                            verbose=verbose,
-                                            bubble_id=str(i + 1),
-                                            rotation_deg=forced_stack_rotation,
-                                            vertical_stack=True,
-                                            text_color_rgb=text_color_rgb,
-                                            raise_on_safe_error=False,
-                                            text_background_color=text_bg_rgb,
-                                            fallback_padding_pixels=osb_padding_pixels,
-                                        )
-                                        log_message(
-                                            "Vertical-stack fallback succeeded",
-                                            verbose=verbose,
-                                        )
-                                        success = True
-                                    except Exception as e2:
-                                        log_message(
-                                            f"Vertical-stack fallback failed: {e2}",
-                                            verbose=verbose,
-                                        )
-                                        # Restore original OSB patch if available
-                                        if "original_crop_pil" in bubble:
-                                            log_message(
-                                                f"Restoring original OSB patch for {bbox}",
-                                                verbose=verbose,
-                                                always_print=True,
-                                            )
-                                            rendered_image = pil_cleaned_image.copy()
-                                            original_patch = bubble["original_crop_pil"]
-                                            rendered_image.paste(
-                                                original_patch, (bbox[0], bbox[1])
-                                            )
-                                            success = True
-                                        else:
-                                            rendered_image = pil_cleaned_image
-                                            success = False
-                                else:
-                                    if "original_crop_pil" in bubble:
-                                        log_message(
-                                            f"Restoring original OSB patch for {bbox}",
-                                            verbose=verbose,
-                                            always_print=True,
-                                        )
-                                        rendered_image = pil_cleaned_image.copy()
-                                        original_patch = bubble["original_crop_pil"]
-                                        rendered_image.paste(
-                                            original_patch, (bbox[0], bbox[1])
-                                        )
-                                        success = True
-                                    else:
-                                        rendered_image = pil_cleaned_image
-                                        success = False
-                        else:
-                            try:
-                                rendered_image = render_text_skia(
-                                    pil_image=pil_cleaned_image,
-                                    text=text,
-                                    bbox=bbox,
-                                    font_dir=font_dir,
-                                    cleaned_mask=cleaned_mask,
-                                    bubble_color_bgr=bubble_color_bgr,
-                                    config=render_config,
-                                    verbose=verbose,
-                                    bubble_id=str(i + 1),
-                                    rotation_deg=rotation_deg,
-                                    vertical_stack=vertical_stack,
-                                    text_color_rgb=text_color_rgb,
-                                    raise_on_safe_error=True,
-                                )
-                                success = True
-                            except ImageProcessingError as e:
-                                safe_area_failed = (
-                                    "Safe area calculation failed" in str(e)
-                                )
-                                retry_result = None
-                                if safe_area_failed and base_mask is not None:
-                                    log_message(
-                                        f"Safe area failed for bubble {bbox}, retrying mask with Otsu",
-                                        verbose=verbose,
-                                        always_print=True,
-                                    )
-                                    retry_result = retry_cleaning_with_otsu(
-                                        original_cv_image,
-                                        {
-                                            "base_mask": base_mask,
-                                            "bbox": bbox,
-                                            "is_sam": is_sam_mask,
-                                            "is_colored": (
-                                                render_info.get("is_colored", False)
-                                                if render_info
-                                                else False
-                                            ),
-                                            "text_bbox": (
-                                                render_info.get("text_bbox")
-                                                if render_info
-                                                else None
-                                            ),
-                                            "text_color_bgr": (
-                                                render_info.get("text_color_bgr")
-                                                if render_info
-                                                else None
-                                            ),
-                                        },
-                                        config.cleaning.thresholding_value,
-                                        config.cleaning.roi_shrink_px,
-                                        processing_scale,
-                                        verbose=verbose,
-                                        classify_colored=(
-                                            config.cleaning.inpaint_colored_bubbles
-                                        ),
-                                    )
-
-                                if (
-                                    retry_result
-                                    and retry_result.get("mask") is not None
-                                ):
-                                    cleaned_mask = retry_result["mask"]
-                                    bubble_color_bgr = retry_result.get(
-                                        "color", bubble_color_bgr
-                                    )
-                                    base_mask = retry_result.get("base_mask", base_mask)
-                                    if render_info is not None:
-                                        render_info.update(
-                                            {
-                                                "mask": cleaned_mask,
-                                                "color": bubble_color_bgr,
-                                                "base_mask": base_mask,
-                                                "is_colored": retry_result.get(
-                                                    "is_colored",
-                                                    render_info.get(
-                                                        "is_colored", False
-                                                    ),
-                                                ),
-                                                "text_bbox": retry_result.get(
-                                                    "text_bbox",
-                                                    render_info.get("text_bbox"),
-                                                ),
-                                            }
-                                        )
-
-                                    try:
-                                        rendered_image = render_text_skia(
-                                            pil_image=pil_cleaned_image,
-                                            text=text,
-                                            bbox=bbox,
-                                            font_dir=font_dir,
-                                            cleaned_mask=cleaned_mask,
-                                            bubble_color_bgr=bubble_color_bgr,
-                                            config=render_config,
-                                            verbose=verbose,
-                                            bubble_id=str(i + 1),
-                                            rotation_deg=rotation_deg,
-                                            vertical_stack=vertical_stack,
-                                            raise_on_safe_error=False,
-                                        )
-                                        success = True
-                                    except (
-                                        RenderingError,
-                                        FontError,
-                                        ImageProcessingError,
-                                    ) as e2:
-                                        log_message(
-                                            f"Text rendering failed after Otsu retry: {e2}",
-                                            verbose=verbose,
-                                        )
-                                        rendered_image = pil_cleaned_image
-                                        success = False
-                                if not success:
-                                    # Final fallback to padded bbox path
-                                    fallback_msg = (
-                                        f"Safe area calculation failed for {bbox}, using padded bbox fallback"
-                                        if safe_area_failed
-                                        else f"Rendering retry fallback for {bbox}, using padded bbox method"
-                                    )
-                                    log_message(
-                                        fallback_msg,
-                                        verbose=verbose,
-                                    )
-                                    try:
-                                        rendered_image = render_text_skia(
-                                            pil_image=pil_cleaned_image,
-                                            text=text,
-                                            bbox=bbox,
-                                            font_dir=font_dir,
-                                            cleaned_mask=cleaned_mask,
-                                            bubble_color_bgr=bubble_color_bgr,
-                                            config=render_config,
-                                            verbose=verbose,
-                                            bubble_id=str(i + 1),
-                                            rotation_deg=rotation_deg,
-                                            vertical_stack=vertical_stack,
-                                            raise_on_safe_error=False,
-                                        )
-                                        success = True
-                                    except (RenderingError, FontError) as e2:
-                                        log_message(
-                                            f"Text rendering failed: {e2}",
-                                            verbose=verbose,
-                                        )
-                                        rendered_image = pil_cleaned_image
-                                        success = False
-                            except (RenderingError, FontError) as e:
-                                log_message(
-                                    f"Text rendering failed: {e}", verbose=verbose
-                                )
-                                rendered_image = pil_cleaned_image
-                                success = False
-
-                        if success:
-                            pil_cleaned_image = rendered_image
+                        if result.success:
+                            pil_cleaned_image = result.image
                             final_image_to_save = pil_cleaned_image
                         else:
                             log_message(
@@ -2004,7 +1628,7 @@ def translate_and_render(
             verbose=verbose,
         )
 
-    # Save Output
+    # 8. Save Output
     if output_path:
         if final_image_to_save.mode != target_mode:
             log_message(f"Converting final image to {target_mode}", verbose=verbose)

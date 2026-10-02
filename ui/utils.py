@@ -66,7 +66,10 @@ from .settings_manager import DEFAULT_SETTINGS, PROVIDER_MODELS, get_saved_setti
 
 def get_available_providers(ocr_method: str) -> list[str]:
     """Get list of available providers based on OCR method."""
-    return list(PROVIDER_MODELS.keys())
+    providers = list(PROVIDER_MODELS.keys())
+    if ocr_method == "LLM":
+        providers = [p for p in providers if p != "DeepL"]
+    return providers
 
 
 ERROR_PREFIX = "❌ Error: "
@@ -110,6 +113,7 @@ def validate_api_key(api_key: str, provider: str) -> tuple[bool, str]:
         "Meta Model": "META_MODEL_API_KEY or META_API_KEY",
         "OpenRouter": "OPENROUTER_API_KEY",
         "DeepSeek": "DEEPSEEK_API_KEY",
+        "DeepL": "DEEPL_API_KEY or DEEPL_AUTH_KEY",
         "Moonshot AI": "MOONSHOT_API_KEY",
         "Xiaomi MiMo": "MIMO_API_KEY",
         "Z.ai": "ZAI_API_KEY",
@@ -136,6 +140,10 @@ def validate_api_key(api_key: str, provider: str) -> tuple[bool, str]:
         elif provider == "QwenCloud":
             api_key = os.environ.get("QWENCLOUD_API_KEY") or os.environ.get(
                 "QWEN_API_KEY", ""
+            )
+        elif provider == "DeepL":
+            api_key = os.environ.get("DEEPL_API_KEY") or os.environ.get(
+                "DEEPL_AUTH_KEY", ""
             )
         elif provider == "OpenCode":
             api_key = (
@@ -927,6 +935,9 @@ def get_sampling_slider_interactivity(
     if not use_custom_sampling:
         return False, False, False
 
+    if provider == "DeepL":
+        return False, False, False
+
     temp_interactive, top_p_interactive = get_sampling_interactivity_for_effort(
         provider, model_name, reasoning_effort
     )
@@ -1071,6 +1082,7 @@ def update_translation_ui(
     xai_visible_update = gr.update(visible=(provider == "SpaceXAI"))
     meta_visible_update = gr.update(visible=(provider == "Meta Model"))
     deepseek_visible_update = gr.update(visible=(provider == "DeepSeek"))
+    deepl_visible_update = gr.update(visible=(provider == "DeepL"))
     zai_visible_update = gr.update(visible=(provider == "Z.ai"))
     moonshot_visible_update = gr.update(visible=(provider == "Moonshot AI"))
     mimo_visible_update = gr.update(visible=(provider == "Xiaomi MiMo"))
@@ -1156,14 +1168,18 @@ def update_translation_ui(
 
     max_tokens_cap = get_max_tokens_cap(provider, remembered_model)
     max_tokens_maximum = max_tokens_cap if max_tokens_cap is not None else 63488
-    max_tokens_update = gr.update(value=max_tokens_value, maximum=max_tokens_maximum)
+    max_tokens_update = gr.update(
+        value=max_tokens_value,
+        maximum=max_tokens_maximum,
+        visible=provider != "DeepL",
+    )
 
     is_gemini_3_google = provider == "Google" and is_gemini_3_model(remembered_model)
     is_gemini_3_openrouter = provider == "OpenRouter" and is_gemini_3_model(
         remembered_model
     )
 
-    enable_web_search_visible = provider not in ("OpenAI-Compatible",)
+    enable_web_search_visible = provider not in ("OpenAI-Compatible", "DeepL")
     enable_web_search_label, enable_web_search_info = (
         get_enable_web_search_label_and_info(provider)
     )
@@ -1270,6 +1286,7 @@ def update_translation_ui(
         xai_visible_update,
         meta_visible_update,
         deepseek_visible_update,
+        deepl_visible_update,
         zai_visible_update,
         moonshot_visible_update,
         mimo_visible_update,
@@ -1376,7 +1393,7 @@ def update_params_for_model(
     )
 
     # Web search checkbox is visible for all providers except OpenAI-Compatible
-    enable_web_search_visible = provider not in ("OpenAI-Compatible",)
+    enable_web_search_visible = provider not in ("OpenAI-Compatible", "DeepL")
 
     enable_web_search_label, enable_web_search_info = (
         get_enable_web_search_label_and_info(provider)
@@ -1431,7 +1448,11 @@ def update_params_for_model(
     max_tokens_value = 16384 if is_reasoning else 4096
     max_tokens_cap = get_max_tokens_cap(provider, model_name)
     max_tokens_maximum = max_tokens_cap if max_tokens_cap is not None else 63488
-    max_tokens_update = gr.update(value=max_tokens_value, maximum=max_tokens_maximum)
+    max_tokens_update = gr.update(
+        value=max_tokens_value,
+        maximum=max_tokens_maximum,
+        visible=provider != "DeepL",
+    )
 
     # Effort dropdown (Claude Opus 4.5+ and Sonnet 4.6)
     effort_visible, effort_choices, effort_default_value = get_effort_config(

@@ -19,6 +19,36 @@ from utils.model_metadata import (
 )
 
 
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from .env without overriding existing environment variables."""
+    candidates = (
+        Path(__file__).resolve().parent / ".env",
+        Path.cwd() / ".env",
+    )
+    seen: set[Path] = set()
+    for env_path in candidates:
+        resolved = env_path.resolve()
+        if resolved in seen or not env_path.is_file():
+            continue
+        seen.add(resolved)
+        for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[7:].strip()
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+_load_dotenv()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Translate manga/comic speech bubbles using a configuration approach",
@@ -104,11 +134,12 @@ def main():
             "Moonshot AI",
             "Xiaomi MiMo",
             "QwenCloud",
+            "DeepL",
             "OpenCode",
             "OpenRouter",
             "OpenAI-Compatible",
         ],
-        help="LLM provider to use for translation",
+        help="Translation provider to use",
     )
     parser.add_argument(
         "--google-api-key",
@@ -156,6 +187,15 @@ def main():
         type=str,
         default=None,
         help="DeepSeek API key (overrides DEEPSEEK_API_KEY env var if --provider is DeepSeek)",
+    )
+    parser.add_argument(
+        "--deepl-api-key",
+        type=str,
+        default=None,
+        help=(
+            "DeepL API key (overrides DEEPL_API_KEY or DEEPL_AUTH_KEY env var "
+            "if --provider is DeepL)"
+        ),
     )
     parser.add_argument(
         "--zai-api-key",
@@ -670,10 +710,66 @@ def main():
     parser.add_argument(
         "--osb-inpainting-method",
         type=str,
-        choices=["flux_klein_9b", "flux_klein_4b", "flux_kontext", "opencv", "none"],
+        choices=[
+            "flux_klein_9b",
+            "flux_klein_4b",
+            "flux_kontext",
+            "lama_large",
+            "opencv",
+            "none",
+        ],
         default="flux_klein_4b",
         help="Inpainting method for outside text removal.",
     )
+    parser.add_argument(
+        "--osb-lama-inpainting-size",
+        type=int,
+        default=2048,
+        help="Max side length for LaMa Large inpainting before downscale.",
+    )
+    parser.add_argument(
+        "--osb-lama-no-dbnet-mask",
+        dest="osb_lama_use_dbnet_mask",
+        action="store_false",
+        help="Disable DBNet+CRF stroke masks for LaMa Large (use rectangular OSB masks).",
+    )
+    parser.set_defaults(osb_lama_use_dbnet_mask=True)
+    parser.add_argument(
+        "--osb-lama-detect-size",
+        type=int,
+        default=2048,
+        help="Max side length for the DBNet text mask used by LaMa Large.",
+    )
+    parser.add_argument(
+        "--osb-lama-mask-dilation",
+        type=int,
+        default=15,
+        help="Stroke-mask dilation offset for LaMa Large (MIT mask_dilation_offset).",
+    )
+    parser.add_argument(
+        "--osb-lama-max-dilation",
+        type=int,
+        default=15,
+        help="Hard cap on the LaMa stroke-mask dilation kernel (pixels, odd).",
+    )
+    parser.add_argument(
+        "--osb-lama-kernel-size",
+        type=int,
+        default=3,
+        help="Final ellipse kernel size applied to the LaMa stroke mask.",
+    )
+    parser.add_argument(
+        "--osb-lama-dump-masks",
+        action="store_true",
+        help="Write DBNet raw / stroke / overlay PNGs under the output directory (lama_mask_debug/).",
+    )
+    parser.add_argument(
+        "--osb-lama-no-crf",
+        dest="osb_lama_use_crf",
+        action="store_false",
+        help="Skip CRF/GrabCut snap and only threshold+dilate the DBNet raw mask.",
+    )
+    parser.set_defaults(osb_lama_use_crf=True)
     parser.add_argument(
         "--osb-flux-backend",
         type=str,
@@ -963,7 +1059,12 @@ def main():
             "--osb-flux-backend nunchaku is only supported with "
             "--osb-inpainting-method flux_kontext."
         )
-    if args.osb_flux_backend == "sdcpp" and args.osb_flux_sdcpp_text_encoder_quant:
+    if (
+        args.osb_flux_backend == "sdcpp"
+        and args.osb_flux_sdcpp_text_encoder_quant
+        and args.osb_inpainting_method
+        in ("flux_klein_9b", "flux_klein_4b", "flux_kontext")
+    ):
         valid_text_encoder_quants = flux_sdcpp_text_encoder_quants(
             args.osb_inpainting_method
         )
@@ -1056,6 +1157,15 @@ def main():
         api_key_arg_name = "--deepseek-api-key"
         api_key_env_var = "DEEPSEEK_API_KEY"
         default_model = "deepseek-v4-flash"
+    elif provider == "DeepL":
+        api_key = (
+            args.deepl_api_key
+            or os.environ.get("DEEPL_API_KEY")
+            or os.environ.get("DEEPL_AUTH_KEY")
+        )
+        api_key_arg_name = "--deepl-api-key"
+        api_key_env_var = "DEEPL_API_KEY or DEEPL_AUTH_KEY"
+        default_model = "deepl"
     elif provider == "Z.ai":
         api_key = args.zai_api_key or os.environ.get("ZAI_API_KEY")
         api_key_arg_name = "--zai-api-key"
@@ -1119,6 +1229,16 @@ def main():
     model_name = args.model_name or default_model
     if not args.model_name:
         log_message(f"Using default model for {provider}: {model_name}", verbose=True)
+
+    if provider == "DeepL":
+        if args.translation_mode != "two-step" or args.ocr_method == "LLM":
+            log_message(
+                "DeepL is text-only; using two-step translation with local OCR",
+                always_print=True,
+            )
+        args.translation_mode = "two-step"
+        if args.ocr_method == "LLM":
+            args.ocr_method = "manga-ocr"
 
     target_device = (
         torch.device("cpu")
@@ -1210,6 +1330,14 @@ def main():
                 api_key
                 if provider == "DeepSeek"
                 else os.environ.get("DEEPSEEK_API_KEY", "")
+            ),
+            deepl_api_key=(
+                api_key
+                if provider == "DeepL"
+                else (
+                    os.environ.get("DEEPL_API_KEY")
+                    or os.environ.get("DEEPL_AUTH_KEY", "")
+                )
             ),
             zai_api_key=(
                 api_key if provider == "Z.ai" else os.environ.get("ZAI_API_KEY", "")
@@ -1337,6 +1465,14 @@ def main():
             flux_upscale_small_crops=args.osb_flux_upscale_small_crops,
             flux_group_regions=args.osb_flux_group_regions,
             flux_residual_diff_threshold=args.osb_flux_residual_threshold,
+            lama_inpainting_size=args.osb_lama_inpainting_size,
+            lama_use_dbnet_mask=args.osb_lama_use_dbnet_mask,
+            lama_detect_size=args.osb_lama_detect_size,
+            lama_mask_dilation_offset=args.osb_lama_mask_dilation,
+            lama_mask_max_dilation=args.osb_lama_max_dilation,
+            lama_kernel_size=args.osb_lama_kernel_size,
+            lama_use_crf=args.osb_lama_use_crf,
+            lama_dump_masks=args.osb_lama_dump_masks,
             osb_confidence=args.osb_confidence,
             osb_text_free_only=args.osb_text_free_only,
             seed=args.osb_seed,

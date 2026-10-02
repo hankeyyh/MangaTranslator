@@ -357,16 +357,17 @@ def check_fit(
         verbose: Whether to print detailed logs
 
     Returns:
-        Dict containing fit data if successful, None if doesn't fit
+        dict | None: 放得下时返回布局数据（lines、metrics 等），否则 None
     """
     try:
+        # 初始化 HarfBuzz 字体，按当前字号缩放
         hb_font = hb.Font(regular_hb_face)
         hb_font.ptem = float(font_size)
 
-        # Standard HarfBuzz scaling: font_size * 64 (for 26.6 fixed point coordinates)
         hb_scale = int(font_size * 64)
         hb_font.scale = (hb_scale, hb_scale)
 
+        # 读取 Skia 字体度量，算出单行行高
         skia_font_test = skia.Font(regular_typeface, font_size)
         try:
             metrics = skia_font_test.getMetrics()
@@ -383,6 +384,7 @@ def check_fit(
                 )
             single_line_height = font_size * 1.2 * line_spacing_mult
 
+        # 竖排：交给专用布局，检查列宽列高是否放得下
         if vertical_stack:
             return _build_vertical_layout(
                 text,
@@ -395,7 +397,7 @@ def check_fit(
                 metrics,
             )
 
-        # Respect explicit newlines as hard line breaks
+        # 文本含显式换行：按 \n 硬分行，不再自动折行
         if "\n" in text:
             explicit_lines = text.split("\n")
             current_max_line_width = 0.0
@@ -426,11 +428,13 @@ def check_fit(
                 }
             return None
 
+        # 普通横排：先拆词，必要时断词/连字符，再动态规划折行
         tokens: list[tuple[str, bool]] = tokenize_styled_text(
             text, detach_trailing_punctuation
         )
         augmented_tokens: list[str] = []
 
+        # 超长词先尝试韩文/泰文断词或英文连字符拆分
         if hyphenate_before_scaling:
             for token_text, is_styled in tokens:
                 marker = ""
@@ -497,6 +501,7 @@ def check_fit(
         else:
             augmented_tokens = [t for t, _ in tokens]
 
+        # 把句末标点、右括号等粘到前一个 token，避免单独成行
         try:
             GLUE_TRAILING_PUNCT_RE = re.compile(r"^[,.;:!?…]+$")
             GLUE_CLOSERS_RE = re.compile(r"^[\)\]\}\u2019\u201D\'\"]+$")
@@ -529,6 +534,7 @@ def check_fit(
         except Exception:
             pass
 
+        # 折行 DP 用的词宽查询，带缓存避免重复测量
         def word_width_func(word: str) -> float:
             if word_width_cache is not None:
                 cached_key = (word, font_size)
@@ -549,6 +555,7 @@ def check_fit(
             " ", font_size, loaded_hb_faces, features_to_enable
         )
 
+        # 在最大宽度内找最优断行位置
         wrapped_lines_text = find_optimal_breaks_dp(
             augmented_tokens,
             max_render_width,
@@ -562,6 +569,7 @@ def check_fit(
         if not wrapped_lines_text:
             return None
 
+        # 逐行量宽，并计算整块高度
         current_max_line_width = 0
         lines_data_at_size = []
         for line_text_with_markers in wrapped_lines_text:
@@ -584,6 +592,7 @@ def check_fit(
                 verbose=verbose,
             )
 
+        # 宽高都在限制内则返回布局，否则 None
         if (
             current_max_line_width <= max_render_width
             and total_block_height <= max_render_height
@@ -601,6 +610,7 @@ def check_fit(
         return None
 
     except Exception as e:
+        # 测量或折行过程出错，视为放不下
         if verbose:
             log_message(f"Fit check failed at size {font_size}: {e}", verbose=verbose)
         return None
@@ -702,13 +712,19 @@ def find_optimal_layout(
         box_top_left: Optional (x, y) coordinates of the bounding box top-left corner
 
     Returns:
-        Dictionary containing layout data (font_size, lines, metrics, etc.)
+        dict: 能放下的最大字号对应的布局，字段如下：
+            font_size: 最终字号
+            lines: 各行数据列表。横排含 text_with_markers、width。竖排另含 height、advance_height、origin_y 等
+            metrics: 该字号的 Skia 字体度量(ascent/descent 等）
+            max_line_width: 最宽一行的宽度
+            line_height: 单行行高（竖排为 0)
+            orientation: "horizontal" 或 "vertical"
+            block_height: 整块文字高度
 
     Raises:
         RenderingError: If text doesn't fit at minimum font size or layout fails
     """
-    # Preserve explicit newlines if present, otherwise collapse whitespace for
-    # normal paragraph layout. Vertical layout handles whitespace per segment.
+    # 有显式换行则保留；否则压成单段空白。竖排的空白由各段自己处理。
     if "\n" in text or "\r" in text:
         clean_text = text.replace("\r\n", "\n").replace("\r", "\n")
     else:
@@ -716,6 +732,7 @@ def find_optimal_layout(
     if not clean_text:
         raise RenderingError("Empty text cannot be laid out")
 
+    # 记录目前能放下的最大字号及其布局
     best_fit_size = -1
     best_fit_lines_data = None
     best_fit_metrics = None
@@ -723,8 +740,10 @@ def find_optimal_layout(
     best_fit_line_height = 0.0
     best_fit_block_height = 0.0
 
+    # 同一字号下复用单词宽度，避免二分时重复测量
     word_width_cache: dict[tuple[str, int], float] = {}
 
+    # 二分查找能放下的最大字号
     low = min_font_size
     high = max_font_size
 
@@ -737,9 +756,11 @@ def find_optimal_layout(
 
         succeeded_at_current_size = False
         current_width_attempt = max_render_width
+        # 有 mask 时允许最多缩窄 3 次，避开气泡边缘碰撞
         max_squeezes = 3 if cleaned_mask is not None else 1
 
         for _ in range(max_squeezes):
+            # 当前字号、当前宽度下能否排进高度限制
             fit_data = check_fit(
                 mid,
                 clean_text,
@@ -761,9 +782,10 @@ def find_optimal_layout(
             )
 
             if fit_data is None:
-                # Squeezing narrower won't help (only makes it taller)
+                # 宽度已经放不下高度；再缩窄只会更高，没必要继续
                 break
 
+            # 横排且有气泡 mask 时，检查文字是否撞到气泡外
             if (
                 cleaned_mask is not None
                 and box_top_left is not None
@@ -778,6 +800,7 @@ def find_optimal_layout(
                 )
 
                 if not has_collision:
+                    # 无碰撞，记下当前字号
                     best_fit_size = mid
                     best_fit_lines_data = fit_data["lines"]
                     best_fit_metrics = fit_data["metrics"]
@@ -788,6 +811,7 @@ def find_optimal_layout(
                     succeeded_at_current_size = True
                     break
                 else:
+                    # 有碰撞：把可用宽度缩到 90%，再试一次
                     if verbose:
                         log_message(
                             f"Collision at size {mid} width {current_width_attempt:.0f}, squeezing...",
@@ -796,6 +820,7 @@ def find_optimal_layout(
                     current_width_attempt *= 0.90
                     continue
             else:
+                # 无 mask 或竖排：能放下就算成功
                 best_fit_size = mid
                 best_fit_lines_data = fit_data["lines"]
                 best_fit_metrics = fit_data["metrics"]
@@ -805,11 +830,13 @@ def find_optimal_layout(
                 succeeded_at_current_size = True
                 break
 
+        # 能放下就试更大字号，否则缩小
         if succeeded_at_current_size:
             low = mid + 1
         else:
             high = mid - 1
 
+    # 最小字号也放不下
     if best_fit_size == -1:
         log_message(
             f"Text too large for bubble at min size {min_font_size}: '{clean_text[:30]}'",

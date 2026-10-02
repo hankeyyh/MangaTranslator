@@ -8,6 +8,70 @@ from utils.exceptions import TranslationError, ValidationError
 from utils.logging import log_message
 
 
+def _parse_gemini_generate_content_result(
+    result: dict[str, Any],
+    debug: bool = False,
+) -> str | None:
+    """Extract text from a Gemini generateContent JSON body.
+
+    Gemini often returns ``"content": null`` (SAFETY, MAX_TOKENS, RECITATION)
+    instead of omitting the key. ``dict.get("content", {})`` still yields
+    ``None`` in that case, so callers must not chain ``.get`` onto it.
+    """
+    prompt_feedback = result.get("promptFeedback")
+    if prompt_feedback and prompt_feedback.get("blockReason"):
+        return None
+
+    candidates = result.get("candidates") or []
+    if not candidates:
+        block_reason = (
+            prompt_feedback.get("blockReason") if prompt_feedback else "unknown"
+        )
+        log_message(
+            f"No candidates in Google response. Block reason: {block_reason}",
+            always_print=True,
+        )
+        log_message(
+            f"Full response: {json.dumps(result, indent=2)}",
+            verbose=debug,
+        )
+        return None
+
+    candidate = candidates[0] if isinstance(candidates[0], dict) else {}
+    content = candidate.get("content") or {}
+    if not isinstance(content, dict):
+        content = {}
+    content_parts = content.get("parts") or []
+    if not isinstance(content_parts, list):
+        content_parts = []
+
+    for part in content_parts:
+        if (
+            isinstance(part, dict)
+            and "text" in part
+            and not part.get("thought", False)
+        ):
+            return (part.get("text") or "").strip()
+
+    if (
+        content_parts
+        and isinstance(content_parts[0], dict)
+        and "text" in content_parts[0]
+    ):
+        return (content_parts[0].get("text") or "").strip()
+
+    finish_reason = candidate.get("finishReason") or "unknown"
+    log_message(
+        f"No text content in Google response. Finish reason: {finish_reason}",
+        always_print=True,
+    )
+    log_message(
+        f"Full response: {json.dumps(result, indent=2)}",
+        verbose=debug,
+    )
+    return ""
+
+
 def call_gemini_endpoint(
     api_key: str,
     model_name: str,
@@ -92,52 +156,15 @@ def call_gemini_endpoint(
             log_message("Processing Google response", verbose=debug)
             try:
                 result = response.json()
-                prompt_feedback = result.get("promptFeedback")
-                if prompt_feedback and prompt_feedback.get("blockReason"):
-                    block_reason = prompt_feedback.get("blockReason")
-                    return None
+                return _parse_gemini_generate_content_result(result, debug=debug)
 
-                if "candidates" in result and len(result["candidates"]) > 0:
-                    candidate = result["candidates"][0]
-                    content_parts = candidate.get("content", {}).get("parts", [{}])
-                    if content_parts:
-                        # Filter out thought parts for gemma-4
-                        for part in content_parts:
-                            if "text" in part and not part.get("thought", False):
-                                return part.get("text", "").strip()
-
-                        # Fallback if no non-thought text part exists
-                        if "text" in content_parts[0]:
-                            return content_parts[0].get("text", "").strip()
-
-                    finish_reason = candidate.get("finishReason") or "unknown"
-                    log_message(
-                        f"No text content in Google response. Finish reason: {finish_reason}",
-                        always_print=True,
-                    )
-                    log_message(
-                        f"Full response: {json.dumps(result, indent=2)}",
-                        verbose=debug,
-                    )
-                    return ""
-
-                else:
-                    block_reason = (
-                        prompt_feedback.get("blockReason")
-                        if prompt_feedback
-                        else "unknown"
-                    )
-                    log_message(
-                        f"No candidates in Google response. Block reason: {block_reason}",
-                        always_print=True,
-                    )
-                    log_message(
-                        f"Full response: {json.dumps(result, indent=2)}",
-                        verbose=debug,
-                    )
-                    return None
-
-            except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
+            except (
+                json.JSONDecodeError,
+                KeyError,
+                IndexError,
+                TypeError,
+                AttributeError,
+            ) as e:
                 raise TranslationError(
                     f"Error processing successful Google API response: {e!s}"
                 ) from e

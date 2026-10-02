@@ -1,8 +1,10 @@
+from dataclasses import replace
 from typing import Any
 
 from PIL import Image
 
-from core.config import MangaTranslatorConfig, RenderingConfig
+from core.config import RenderingConfig
+from core.text.region_visual import build_bubble_region, build_osb_region
 from core.text.text_renderer import render_text_skia
 from utils.exceptions import FontError, RenderingError
 from utils.logging import log_message
@@ -11,23 +13,14 @@ from utils.logging import log_message
 def generate_test_placeholders(
     sorted_bubble_data: list[dict[str, Any]],
     processed_bubbles_info: list[dict[str, Any]],
-    config: MangaTranslatorConfig,
-    main_min_font: int,
-    main_max_font: int,
-    osb_min_font: int,
-    osb_max_font: int,
-    padding_pixels: float | None = None,
-    osb_padding_pixels: float | None = None,
-    osb_outline_width: float = 0.0,
+    bubble_render_config: RenderingConfig,
+    osb_render_config: RenderingConfig,
     verbose: bool = False,
 ) -> list[str]:
     """
     Generates test placeholder text by probing the rendering engine.
     Finds the largest text string that fits in the bounding box.
     """
-    padding_pixels_bubble = padding_pixels if padding_pixels is not None else 4.0
-    padding_pixels_osb = osb_padding_pixels if osb_padding_pixels is not None else 4.0
-
     translated_texts = []
     placeholder_long = "Lorem **ipsum** *dolor* sit amet, consectetur adipiscing elit."
     placeholder_short = "Lorem **ipsum** *dolor* sit amet..."
@@ -55,70 +48,18 @@ def generate_test_placeholders(
     for i, bubble in enumerate(sorted_bubble_data):
         bbox = bubble["bbox"]
         is_outside_text = bubble.get("is_outside_text", False)
+        render_config = (
+            osb_render_config if is_outside_text else bubble_render_config
+        )
+        probe_config = replace(render_config, supersampling_factor=1)
 
         probe_info = bubble_render_info_map_probe.get(tuple(bbox), {})
-
-        if is_outside_text:
-            is_dark_text = bubble.get("is_dark_text", True)
-            bubble_color_bgr = (50, 50, 50) if is_dark_text else (255, 255, 255)
-            cleaned_mask = None
-        else:
-            bubble_color_bgr = probe_info.get("color", (255, 255, 255))
-            cleaned_mask = probe_info.get("mask")
-
-        min_font = osb_min_font if is_outside_text else main_min_font
-        max_font = osb_max_font if is_outside_text else main_max_font
-        line_spacing = (
-            config.outside_text.osb_line_spacing
+        region = (
+            build_osb_region(bubble)
             if is_outside_text
-            else config.rendering.line_spacing_mult
-        )
-        use_ligs = (
-            config.outside_text.osb_use_ligatures
-            if is_outside_text
-            else config.rendering.use_ligatures
+            else build_bubble_region(bubble, probe_info)
         )
 
-        probe_config = RenderingConfig(
-            min_font_size=min_font,
-            max_font_size=max_font,
-            line_spacing_mult=line_spacing,
-            use_subpixel_rendering=(
-                config.outside_text.osb_use_subpixel_rendering
-                if is_outside_text
-                else config.rendering.use_subpixel_rendering
-            ),
-            font_hinting=(
-                config.outside_text.osb_font_hinting
-                if is_outside_text
-                else config.rendering.font_hinting
-            ),
-            use_ligatures=use_ligs,
-            hyphenate_before_scaling=config.rendering.hyphenate_before_scaling,
-            hyphen_penalty=config.rendering.hyphen_penalty,
-            hyphenation_min_word_length=config.rendering.hyphenation_min_word_length,
-            badness_exponent=config.rendering.badness_exponent,
-            padding_pixels=padding_pixels_osb
-            if is_outside_text
-            else padding_pixels_bubble,
-            outline_width=(osb_outline_width if is_outside_text else 0.0),
-            supersampling_factor=1,  # No supersampling for probe
-            auto_vertical_text=(
-                config.outside_text.osb_auto_vertical_text
-                if is_outside_text
-                else config.rendering.auto_vertical_text
-            ),
-            vertical_line_spacing_mult=(
-                config.outside_text.osb_vertical_line_spacing_mult
-                if is_outside_text
-                else config.rendering.vertical_line_spacing_mult
-            ),
-            vertical_font_size_mult=(
-                config.outside_text.osb_vertical_font_size_mult
-                if is_outside_text
-                else config.rendering.vertical_font_size_mult
-            ),
-        )
         best_fit = (
             placeholder_tiny.rstrip(".") if is_outside_text else placeholder_tiny
         )  # fallback
@@ -126,12 +67,6 @@ def generate_test_placeholders(
         placeholder_tiers_to_use = [
             t.rstrip(".") if is_outside_text else t for t in placeholder_tiers
         ]
-
-        font_dir = (
-            config.outside_text.osb_font_dir
-            if is_outside_text and config.outside_text.osb_font_dir
-            else config.rendering.font_dir
-        )
 
         # Use a tiny dummy canvas — layout_only skips all pixel work
         _probe_canvas = Image.new("RGBA", (bbox[2] - bbox[0], bbox[3] - bbox[1]))
@@ -146,16 +81,16 @@ def generate_test_placeholders(
                     pil_image=_probe_canvas,
                     text=test_text,
                     bbox=bbox,
-                    font_dir=font_dir,
-                    cleaned_mask=cleaned_mask,
-                    bubble_color_bgr=bubble_color_bgr,
+                    font_dir=probe_config.font_dir,
+                    cleaned_mask=region.cleaned_mask,
+                    bubble_color_bgr=region.bubble_color_bgr,
                     config=probe_config,
                     verbose=verbose,
                     bubble_id=str(i + 1),
                     raise_on_safe_error=False,
                     layout_only=True,
                     fallback_padding_pixels=(
-                        padding_pixels_osb if is_outside_text else None
+                        osb_render_config.padding_pixels if is_outside_text else None
                     ),
                 )
 
@@ -164,7 +99,7 @@ def generate_test_placeholders(
                     best_font_size = font_size
                     best_fit = text_tier
                 # Longest tier already fits at max size — no shorter tier can beat it
-                if best_font_size >= max_font:
+                if best_font_size >= probe_config.max_font_size:
                     break
 
             except (RenderingError, FontError) as e:

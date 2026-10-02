@@ -1,0 +1,167 @@
+"""Modal deployment constants for MangaTranslator (phase 1)."""
+
+APP_NAME = "manga-translator-mt"
+
+MODEL_VOLUME_NAME = "mt-models"
+SCRATCH_VOLUME_NAME = "mt-scratch"
+JOB_DICT_NAME = "mt-jobs"
+
+MODEL_MOUNT_PATH = "/app/models"
+SCRATCH_MOUNT_PATH = "/scratch"
+# Ephemeral per-job workspace. Do not put this on the Modal Volume:
+# @modal.concurrent process_job calls volume.reload() in the same container,
+# and a reload makes the Volume look empty — mkdir /scratch/work then EPERM.
+WORK_DIR_ROOT = "/tmp/mt-work"
+APP_ROOT = "/app"
+FONTS_VOLUME_PATH = f"{MODEL_MOUNT_PATH}/fonts"
+
+ENV_SECRET_NAME = "manga-translator-mt-env"
+
+MAX_IMAGES_PER_JOB = 20
+WORKER_TIMEOUT_SECONDS = 900  # 15 min, per design doc
+GATEWAY_TIMEOUT_SECONDS = 3600
+DOWNLOAD_MODELS_TIMEOUT_SECONDS = 3600
+SSE_HEARTBEAT_SECONDS = 15
+SSE_POLL_SECONDS = 1.0
+
+GATEWAY_CONFIG = {
+    "cpu": 1.0,
+    "memory": 2048,
+    "timeout": GATEWAY_TIMEOUT_SECONDS,
+    "min_containers": 0,
+    "scaledown_window": 60,
+}
+
+GPU_CONFIG = {
+    "gpu": "A10G",
+    "cpu": 4.0,
+    "memory": 16384,
+    "timeout": WORKER_TIMEOUT_SECONDS,
+    "min_containers": 0,
+    # 空转 A10G 很贵；2s 够同一批连续页复用热容器，又不会在测完后挂满 1 分钟。
+    "scaledown_window": 2,
+    "max_inputs": 1,
+}
+
+BASE_IMAGE = "pytorch/pytorch:2.6.0-cuda11.8-cudnn9-runtime"
+
+APT_PACKAGES = [
+    "libsm6",
+    "libxext6",
+    "libxrender1",
+    "libgomp1",
+    "libglib2.0-0",
+    "libgl1",
+    "libegl1",
+    "libgles2",
+    "libglx-mesa0",
+    "libopengl0",
+    "curl",
+    "wget",
+    "git",
+    "fonts-dejavu-core",
+]
+
+# Gateway: no torch. Worker: torch comes from the CUDA base image.
+GATEWAY_PIP_PACKAGES = [
+    "fastapi>=0.115",
+    "pydantic>=2",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+]
+
+# Keep Gradio / FLUX / SAM out of the production image.
+WORKER_PIP_PACKAGES = GATEWAY_PIP_PACKAGES + [
+    "deepl>=1.19.0",
+    "fonttools>=4.56.0",
+    "huggingface_hub>=0.26.0",
+    "manga-ocr>=0.1.15",
+    "numpy>=1.24.0",
+    "opencv-contrib-python-headless>=4.8.0",
+    "packaging>=24.0",
+    "pillow>=11.1.0",
+    "pyoxipng>=9.1.1",
+    "pythainlp>=5.3.4",
+    "requests>=2.32.3",
+    "safetensors>=0.4.0",
+    "scikit-learn>=1.3.0",
+    "scipy>=1.10.0",
+    "skia-python>=87.7",
+    "spandrel>=0.3.0",
+    "transformers>=4.51.0",
+    "uharfbuzz>=0.48.0",
+    "ultralytics>=8.3.94",
+]
+
+# CUDA kernel / inductor 缓存必须写本地盘。XDG_CACHE_HOME 若指到 Volume，
+# Torch 建 /app/models/cache/torch/kernels 会失败并禁用 kernel cache，每次冷启动重新 JIT。
+TORCH_KERNEL_CACHE = "/tmp/torch-kernels"
+TORCH_INDUCTOR_CACHE = "/tmp/torchinductor"
+TRITON_CACHE = "/tmp/triton"
+
+ENV_VARS = {
+    "PYTHONPATH": APP_ROOT,
+    "PYTHONUNBUFFERED": "1",
+    "TORCH_HOME": MODEL_MOUNT_PATH,
+    "HF_HOME": f"{MODEL_MOUNT_PATH}/huggingface",
+    "HF_HUB_CACHE": f"{MODEL_MOUNT_PATH}/huggingface",
+    "TRANSFORMERS_CACHE": f"{MODEL_MOUNT_PATH}/transformers",
+    "XDG_CACHE_HOME": f"{MODEL_MOUNT_PATH}/cache",
+    "PYTORCH_KERNEL_CACHE_PATH": TORCH_KERNEL_CACHE,
+    "TORCHINDUCTOR_CACHE_DIR": TORCH_INDUCTOR_CACHE,
+    "TRITON_CACHE_DIR": TRITON_CACHE,
+    "MT_MODELS_DIR": MODEL_MOUNT_PATH,
+    "YOLO_CONFIG_DIR": "/tmp",
+    "CUDA_VISIBLE_DEVICES": "0",
+}
+
+DEFAULT_FONT_NAME = "noto-sans"
+
+FONT_NAME_ALIASES = {
+    # latin
+    "noto-sans": "NotoSans",
+    "cc-wild-words": "CC-Wild-Words",
+    "bangers": "Bangers",
+    "caveat": "Caveat",
+    # chs
+    "zcool-kuai-le": "ZcoolKuaiLe",
+    "noto-sans-sc": "NotoSansSc",
+    "long-cang": "LongCang",
+    "ma-shan-zheng": "MaShanZheng",
+    # cht
+    "noto-sans-tc": "NotoSansTc",
+    "lxgw-wenkai-tc": "LXGW-WenKai-TC",
+    # ja
+    "genei-antique": "GeneiAntique",
+    "noto-sans-jp": "NotoSansJp",
+    "genei-late-go-n": "GeneiLateGoN",
+    "zen-kurenaido": "ZenKurenaido",
+    # kor
+    "komacon": "KOMACON",
+    "noto-sans-kr": "NotoSansKr",
+    "gowun-dodum": "GowunDodum",
+    "nanum-pen-script": "NanumPenScript",
+    # tha
+    "itim": "Itim",
+    "noto-sans-thai": "NotoSansThai",
+    "charmonman": "Charmonman",
+    "playpen-sans-thai": "PlaypenSansThai",
+    # ara
+    "noto-sans-arabic": "NotoSansArabic",
+    "qts-manga": "QtsManga",
+}
+
+PROVIDER_ALIASES = {
+    "deepseek": "DeepSeek",
+    "deepl": "DeepL",
+    "google": "Google",
+    "gemini": "Google",
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "spacexai": "SpaceXAI",
+    "xai": "SpaceXAI",
+    "openrouter": "OpenRouter",
+}
+
+TERMINAL_EVENTS = frozenset({"job_completed", "job_failed"})
+ACTIVE_JOB_STATUSES = frozenset({"queued", "running", "completed"})

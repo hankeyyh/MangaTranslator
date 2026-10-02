@@ -132,6 +132,7 @@ def render_text_skia(
         RenderingError: If rendering fails due to invalid inputs, font issues, or layout problems
         FontError: If font loading fails
     """
+    # 校验气泡框尺寸
     x1, y1, x2, y2 = bbox
     bubble_width = x2 - x1
     bubble_height = y2 - y1
@@ -140,7 +141,7 @@ def render_text_skia(
         log_message(f"Invalid bbox dimensions: {bbox}", always_print=True)
         raise RenderingError(f"Invalid bounding box dimensions: {bbox}")
 
-    # em dash can break wrapping
+    # 规范化文本：长破折号改成短横，避免断行异常；压缩多余空白
     normalized_text = text.replace("—", "-")
 
     clean_text = " ".join(normalized_text.split())
@@ -149,10 +150,11 @@ def render_text_skia(
 
     layout_text = clean_text
 
-    # Initialize config with defaults if not provided
+    # 未传入配置时使用默认渲染参数
     if config is None:
         config = RenderingConfig()
 
+    # 1.有气泡 mask 时，按质心扩张计算安全排版区域
     layout_box_top_left = None
     safe_area_result = None
     safe_area_fallback_logged = False
@@ -162,7 +164,7 @@ def render_text_skia(
                 cleaned_mask, padding_pixels=config.padding_pixels, verbose=verbose
             )
         except ImageProcessingError:
-            # Safe area calculation failed, will use fallback below
+            # 安全区失败后走下面的内缩 bbox 回退
             safe_area_result = None
             if raise_on_safe_error:
                 raise
@@ -172,6 +174,7 @@ def render_text_skia(
             )
             safe_area_fallback_logged = True
 
+    # 2.确定排版框：优先用安全区，否则把 bbox 向内缩一圈（osb）
     if safe_area_result is not None:
         guaranteed_box, _ = safe_area_result
         box_x, box_y, box_w, box_h = guaranteed_box
@@ -182,7 +185,6 @@ def render_text_skia(
         target_center_y = box_y + box_h / 2.0
         log_message("Using centroid-based safe area calculation", verbose=verbose)
     else:
-        # Fallback to padded bbox
         if not safe_area_fallback_logged:
             log_message(
                 "Safe area calculation failed, falling back to padded bbox method",
@@ -202,6 +204,7 @@ def render_text_skia(
         target_center_x = x1 + bubble_width / 2.0
         target_center_y = y1 + bubble_height / 2.0
 
+    # 3.查找字体变体，并剔除当前字体不支持的字符
     try:
         font_variants = find_font_variants(font_dir, verbose=verbose)
         regular_font_path = font_variants.get("regular")
@@ -218,6 +221,7 @@ def render_text_skia(
         )
         return pil_image
 
+    # 4.加载常规字体的 Skia / HarfBuzz 资源
     try:
         _, regular_typeface, regular_hb_face = load_font_resources(
             str(regular_font_path)
@@ -225,6 +229,7 @@ def render_text_skia(
     except FontError as e:
         raise RenderingError(f"Font resource loading failed: {e}") from e
 
+    # 5.检测并开启可用的字体特性（字距、连字、上下文替换）
     available_features = get_font_features(str(regular_font_path))
     features_to_enable = {
         "kern": "kern" in available_features["GPOS"],
@@ -236,7 +241,7 @@ def render_text_skia(
         verbose=verbose,
     )
 
-    # Pre-load all required font variants for layout engine
+    # 6.预加载斜体/粗体等变体，供排版引擎测量宽度
     preload_hb_faces = {"regular": regular_hb_face}
     for style_key in ["italic", "bold", "bold_italic"]:
         style_path = font_variants.get(style_key)
@@ -245,6 +250,7 @@ def render_text_skia(
             if _hb_face:
                 preload_hb_faces[style_key] = _hb_face
 
+    # 按横排或竖排参数求最优字号与换行，使用DP查找全局最优排版
     def _find_layout(use_vertical_stack: bool) -> dict:
         line_spacing = (
             config.vertical_line_spacing_mult
@@ -280,6 +286,7 @@ def render_text_skia(
             use_vertical_stack,
         )
 
+    # 7.先按当前方向排版；失败则竖排兜底，成功则可再比较是否改用竖排
     try:
         layout_data = _find_layout(vertical_stack)
     except RenderingError as e:
@@ -318,12 +325,14 @@ def render_text_skia(
             except RenderingError:
                 pass
 
+    # 只算布局、不真正绘制时提前返回字号
     if layout_only:
         log_message(f"Rendered at size {layout_data['font_size']}", verbose=verbose)
         result = Image.new("RGBA", (1, 1))
         result.info["font_size"] = layout_data["font_size"]
         return result
 
+    # 8.按文本样式标记加载对应字体变体，缺省则回退到常规体
     required_styles = {"regular"} | {
         style for _, style in parse_styled_segments(clean_text)
     }
@@ -352,17 +361,15 @@ def render_text_skia(
                     verbose=verbose,
                 )
 
-    # Determine text color contrast based on sampled background brightness
+    # 9.根据气泡底色决定文字颜色：深底白字，浅底黑字
     text_color = skia.ColorBLACK
     if text_color_rgb is not None:
         text_color = skia.Color(text_color_rgb[0], text_color_rgb[1], text_color_rgb[2])
     elif bubble_color_bgr is not None:
         try:
-            # bubble_color_bgr may be a grayscale proxy; treat as BGR
             bg_brightness = (
                 bubble_color_bgr[0] + bubble_color_bgr[1] + bubble_color_bgr[2]
             ) / 3.0
-            # If background is dark, use white text; if light, use black
             text_color = (
                 skia.ColorWHITE
                 if bg_brightness < GRAYSCALE_MIDPOINT
@@ -371,6 +378,7 @@ def render_text_skia(
         except Exception:
             text_color = skia.ColorBLACK
 
+    # 如指定文字底色，转为 Skia 颜色
     skia_bg_color = None
     if text_background_color is not None:
         skia_bg_color = skia.Color(
@@ -379,14 +387,14 @@ def render_text_skia(
             text_background_color[2],
         )
 
-    # Apply supersampling if enabled
+    # 10.渲染
+    # 超采样：放大绘制后再缩小，减轻锯齿
     if config.supersampling_factor > 1:
         log_message(
             f"Using supersampling factor {config.supersampling_factor}", verbose=verbose
         )
 
-        # Crop the bbox region from the original image
-        # Ensure bbox coordinates are within image bounds
+        # 裁出气泡区域（坐标夹到图像范围内）
         img_width, img_height = pil_image.size
         crop_x1 = max(0, x1)
         crop_y1 = max(0, y1)
@@ -397,7 +405,7 @@ def render_text_skia(
         crop_width = crop_x2 - crop_x1
         crop_height = crop_y2 - crop_y1
 
-        # Upscale the cropped region
+        # 放大裁剪区域
         factor = config.supersampling_factor
         scaled_width = int(crop_width * factor)
         scaled_height = int(crop_height * factor)
@@ -405,11 +413,10 @@ def render_text_skia(
             (scaled_width, scaled_height), Image.Resampling.LANCZOS
         )
 
-        # Scale coordinates relative to bbox origin
+        # 把中心点和布局尺寸按超采样倍数放大
         scaled_target_center_x = (target_center_x - crop_x1) * factor
         scaled_target_center_y = (target_center_y - crop_y1) * factor
 
-        # Scale font size in layout_data for rendering
         scaled_layout_data = layout_data.copy()
         scaled_layout_data["lines"] = [
             line_data.copy() for line_data in layout_data["lines"]
@@ -420,7 +427,6 @@ def render_text_skia(
         if layout_data.get("block_height") is not None:
             scaled_layout_data["block_height"] = layout_data["block_height"] * factor
 
-        # Scale per-line and per-glyph measurements
         for line_data in scaled_layout_data["lines"]:
             for key in (
                 "width",
@@ -436,14 +442,12 @@ def render_text_skia(
                 if key in line_data:
                     line_data[key] = line_data[key] * factor
 
-        # Scale metrics - create a simple object with scaled attributes
         original_metrics = layout_data["metrics"]
 
         class ScaledMetrics:
             def __init__(self, original, scale_factor):
                 self.fAscent = original.fAscent * scale_factor
                 self.fDescent = original.fDescent * scale_factor
-                # Preserve other attributes if they exist
                 if hasattr(original, "fLeading"):
                     self.fLeading = original.fLeading * scale_factor
                 if hasattr(original, "fXMin"):
@@ -458,13 +462,12 @@ def render_text_skia(
         scaled_metrics = ScaledMetrics(original_metrics, factor)
         scaled_layout_data["metrics"] = scaled_metrics
 
-        # Create Skia surface from upscaled region
+        # 在放大后的图上绘制文字
         try:
             scaled_surface = pil_to_skia_surface(upscaled_region)
         except RenderingError as e:
             raise RenderingError(f"Scaled surface preparation failed: {e}") from e
 
-        # Render text at high resolution
         success = draw_layout(
             scaled_surface,
             scaled_layout_data,
@@ -486,7 +489,7 @@ def render_text_skia(
             text_color,
             config.use_subpixel_rendering,
             config.font_hinting,
-            config.outline_width * factor,  # Scale outline width too
+            config.outline_width * factor,
             verbose,
             pre_translate_x=(
                 float(scaled_target_center_x)
@@ -510,18 +513,16 @@ def render_text_skia(
             log_message("Drawing failed", always_print=True)
             raise RenderingError("Text drawing failed")
 
-        # Convert back to PIL and downscale
+        # 缩小后贴回原图
         try:
             scaled_pil_result = skia_surface_to_pil(scaled_surface)
         except RenderingError as e:
             raise RenderingError(f"Scaled conversion failed: {e}") from e
 
-        # Downscale using LANCZOS for high quality
         downscaled_result = scaled_pil_result.resize(
             (crop_width, crop_height), Image.Resampling.LANCZOS
         )
 
-        # Paste the result back onto the original image
         final_pil_image = pil_image.copy()
         final_pil_image.paste(downscaled_result, (crop_x1, crop_y1))
 
@@ -532,13 +533,12 @@ def render_text_skia(
         final_pil_image.info["font_size"] = layout_data["font_size"]
         return final_pil_image
     else:
-        # Normal rendering path (no supersampling)
+        # 普通绘制：直接在原图上排版
         try:
             surface = pil_to_skia_surface(pil_image)
         except RenderingError as e:
             raise RenderingError(f"Surface preparation failed: {e}") from e
 
-        # Delegate rotation/translate to drawing_engine so Skia state is consistent
         success = draw_layout(
             surface,
             layout_data,

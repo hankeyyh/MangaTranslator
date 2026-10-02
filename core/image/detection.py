@@ -1422,6 +1422,7 @@ def detect_speech_bubbles(
                     )
 
             # Keep bubble for conjoined processing; collect text_free for OSB; ignore text_bubble.
+            # 副模型的bubble补进主结果bubble
             if len(secondary_boxes) > 0 and hasattr(secondary_model, "names"):
                 bubble_id = None
                 text_free_id = None
@@ -1494,6 +1495,7 @@ def detect_speech_bubbles(
                         primary_sources.extend(new_box_sources)
 
             # Remove text_free detections (route to OSB if enabled, discard otherwise)
+            # 副模型的text_free从主结果bubble剔除
             if text_free_boxes and len(primary_boxes) > 0:
                 indices_to_remove = []
                 primary_boxes_list = primary_boxes.tolist()
@@ -1547,6 +1549,7 @@ def detect_speech_bubbles(
 
     grouping_primary_boxes = primary_boxes.clone()
 
+    # 气泡框可能偏紧，让文字漏出一部分，这里跑专门检字模型，用文字框撑大气泡框
     osb_text_boxes_np = None
     if osb_text_verification and len(primary_boxes) > 0:
         primary_boxes = _expand_boxes_with_osb_text(
@@ -1613,6 +1616,11 @@ def detect_speech_bubbles(
     if not use_sam:
         log_message("SAM disabled, using YOLO segmentation masks", verbose=verbose)
         img_h, img_w = image_cv.shape[:2]
+        # 把已经定好的框，装配成最终的 detections 列表。
+        # 独立泡（simple_indices）：一框 → 一条结果
+        # 真粘连（conjoined_indices）：父 mask 按子框切开，每个子泡一条，并带上邻居框
+        # 合成粘连（synthetic_conjoined_groups）：并集框当父，同样切开
+        # text_free_boxes 原样返回
         detections = _build_segmentation_detections(
             primary_boxes,
             grouping_primary_boxes,

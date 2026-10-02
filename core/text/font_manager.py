@@ -173,7 +173,11 @@ def sanitize_text_for_font(text: str, font_path: str, verbose: bool = False) -> 
     for char in text:
         codepoint = ord(char)
 
-        if char in STYLE_MARKER_CHARS or char in WHITESPACE_CHARS or codepoint in supported_codepoints:
+        if (
+            char in STYLE_MARKER_CHARS
+            or char in WHITESPACE_CHARS
+            or codepoint in supported_codepoints
+        ):
             sanitized_chars.append(char)
         else:
             removed_chars.append(char)
@@ -225,9 +229,7 @@ def _validate_font_file(font_file: Path, verbose: bool = False) -> bool:
         return False
 
 
-def find_font_variants(
-    font_dir: str, verbose: bool = False
-) -> dict[str, Path | None]:
+def find_font_variants(font_dir: str, verbose: bool = False) -> dict[str, Path | None]:
     """
     Finds regular, italic, bold, and bold-italic font variants (.ttf, .otf)
     in a directory based on filename keywords. Caches results per directory.
@@ -339,7 +341,12 @@ def find_font_variants(
         is_bold = any(kw in stem_lower for kw in FONT_KEYWORDS["bold"])
         is_italic = any(kw in stem_lower for kw in FONT_KEYWORDS["italic"])
         assigned = False
-        if is_regular and not is_bold and not is_italic and not font_variants["regular"]:
+        if (
+            is_regular
+            and not is_bold
+            and not is_italic
+            and not font_variants["regular"]
+        ):
             font_variants["regular"] = font_file
             assigned = True
             log_message(f"Found regular: {font_file.name}", verbose=verbose)

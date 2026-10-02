@@ -699,29 +699,39 @@ def create_layout(
                             visible=False, elem_classes="settings-group"
                         ) as group_translation:
                             gr.Markdown("### OCR & Translation")
-                            config_translation_mode = gr.Radio(
-                                choices=["one-step", "two-step"],
-                                label="Translation Mode",
-                                value=saved_settings.get(
-                                    "translation_mode",
-                                    settings_manager.DEFAULT_SETTINGS[
-                                        "translation_mode"
-                                    ],
-                                ),
-                                info=(
-                                    "Determines whether to perform OCR and translation together or separately. "
-                                    "'two-step' might improve translation quality for less-capable LLMs."
-                                ),
-                                elem_id="config_translation_mode",
+                            _saved_translation_mode = saved_settings.get(
+                                "translation_mode",
+                                settings_manager.DEFAULT_SETTINGS["translation_mode"],
                             )
-                            initial_ocr_method = saved_settings.get(
+                            _saved_ocr_method = saved_settings.get(
                                 "ocr_method",
                                 settings_manager.DEFAULT_SETTINGS.get(
                                     "ocr_method", "LLM"
                                 ),
                             )
+                            _deepl_selected = config_initial_provider == "DeepL"
+                            if _deepl_selected:
+                                _saved_translation_mode = "two-step"
+                                if _saved_ocr_method == "LLM":
+                                    _saved_ocr_method = "manga-ocr"
+                            config_translation_mode = gr.Radio(
+                                choices=["one-step", "two-step"],
+                                label="Translation Mode",
+                                value=_saved_translation_mode,
+                                info=(
+                                    "Determines whether to perform OCR and translation together or separately. "
+                                    "'two-step' might improve translation quality for less-capable LLMs."
+                                ),
+                                elem_id="config_translation_mode",
+                                interactive=not _deepl_selected,
+                            )
+                            initial_ocr_method = _saved_ocr_method
                             ocr_method_radio = gr.Radio(
-                                choices=["LLM", "manga-ocr", "paddleocr-vl-1.6"],
+                                choices=(
+                                    ["manga-ocr", "paddleocr-vl-1.6"]
+                                    if _deepl_selected
+                                    else ["LLM", "manga-ocr", "paddleocr-vl-1.6"]
+                                ),
                                 label="OCR Method",
                                 value=initial_ocr_method,
                                 info=(
@@ -730,13 +740,7 @@ def create_layout(
                                     "and must be used in 'two-step' translation mode."
                                 ),
                                 elem_id="ocr_method_radio",
-                                interactive=saved_settings.get(
-                                    "translation_mode",
-                                    settings_manager.DEFAULT_SETTINGS[
-                                        "translation_mode"
-                                    ],
-                                )
-                                != "one-step",
+                                interactive=_saved_translation_mode != "one-step",
                             )
 
                             gr.Markdown("### LLM Settings")
@@ -822,6 +826,19 @@ def create_layout(
                                 visible=(config_initial_provider == "DeepSeek"),
                                 elem_id="deepseek_api_key",
                                 info="Stored locally. Or set via DEEPSEEK_API_KEY env var.",
+                            )
+                            deepl_api_key = gr.Textbox(
+                                label="DeepL API Key",
+                                placeholder="Enter DeepL API key",
+                                type="password",
+                                value=saved_settings.get("deepl_api_key", ""),
+                                show_copy_button=False,
+                                visible=(config_initial_provider == "DeepL"),
+                                elem_id="deepl_api_key",
+                                info=(
+                                    "Stored locally. Or set via DEEPL_API_KEY / DEEPL_AUTH_KEY env var. "
+                                    "DeepL is text-only and requires two-step translation with local OCR."
+                                ),
                             )
                             zai_api_key = gr.Textbox(
                                 label="Z.ai API Key",
@@ -1040,7 +1057,8 @@ def create_layout(
                             )
 
                             _initial_enable_web_search_visible = (
-                                config_initial_provider not in ("OpenAI-Compatible",)
+                                config_initial_provider
+                                not in ("OpenAI-Compatible", "DeepL")
                             )
                             (
                                 _initial_enable_web_search_label,
@@ -1247,6 +1265,7 @@ def create_layout(
                                 label="Max Tokens",
                                 info="Maximum number of tokens in the response.",
                                 elem_id="config_max_tokens",
+                                visible=config_initial_provider != "DeepL",
                             )
 
                             gr.Markdown("### Context & Upscaling")
@@ -1668,13 +1687,15 @@ def create_layout(
                                         ("Flux.2 Klein 9B", "flux_klein_9b"),
                                         ("Flux.2 Klein 4B", "flux_klein_4b"),
                                         ("Flux.1 Kontext (12B)", "flux_kontext"),
+                                        ("LaMa Large (manga)", "lama_large"),
                                         ("OpenCV", "opencv"),
                                         ("None (text background)", "none"),
                                     ],
                                     label="Inpainting Method",
                                     info=(
                                         "Klein models are newer, but may introduce minor color "
-                                        "shifts. Kontext does not shift colors, but is more dated."
+                                        "shifts. Kontext does not shift colors, but is more dated. "
+                                        "LaMa Large is a fast manga-tuned erase model."
                                     ),
                                 )
                                 _initial_method = saved_settings.get(
@@ -1685,6 +1706,7 @@ def create_layout(
                                     "flux_klein_9b",
                                     "flux_klein_4b",
                                 )
+                                _is_lama = _initial_method == "lama_large"
                                 _backend_visible = _is_klein_model or _is_kontext
                                 _initial_backend = flux_valid_backend(
                                     _initial_method,
@@ -1858,6 +1880,10 @@ def create_layout(
                                 _is_flux_for_klein_options = saved_settings.get(
                                     "outside_text_inpainting_method",
                                     "flux_klein_4b",
+                                ) not in ("opencv", "none", "lama_large")
+                                _is_model_for_group = saved_settings.get(
+                                    "outside_text_inpainting_method",
+                                    "flux_klein_4b",
                                 ) not in ("opencv", "none")
                                 _upscale_small_crops_enabled = saved_settings.get(
                                     "outside_text_flux_upscale_small_crops", True
@@ -1911,16 +1937,27 @@ def create_layout(
                                     value=saved_settings.get(
                                         "outside_text_flux_group_regions", False
                                     ),
-                                    label="Group Flux Regions",
+                                    label="Group Inpaint Regions",
                                     info=(
-                                        "Run one Flux pass over a combined expanded mask for all non-solid OSB regions."
+                                        "Run one inpaint pass over a combined expanded mask for all non-solid OSB regions."
                                     ),
-                                    visible=_is_flux_for_klein_options,
-                                    interactive=saved_settings.get(
-                                        "outside_text_inpainting_method",
-                                        "flux_klein_4b",
-                                    )
-                                    not in ("opencv", "none"),
+                                    visible=_is_model_for_group,
+                                    interactive=_is_model_for_group,
+                                )
+                                outside_text_lama_inpainting_size = gr.Slider(
+                                    512,
+                                    4096,
+                                    value=saved_settings.get(
+                                        "outside_text_lama_inpainting_size", 2048
+                                    ),
+                                    step=64,
+                                    label="LaMa Inpainting Size",
+                                    info=(
+                                        "Max side length sent to LaMa Large. "
+                                        "Larger values keep more detail but use more memory."
+                                    ),
+                                    visible=_is_lama,
+                                    interactive=_is_lama,
                                 )
                                 outside_text_seed = gr.Number(
                                     value=saved_settings.get("outside_text_seed", 1),
@@ -1938,17 +1975,13 @@ def create_layout(
                                     value=saved_settings.get(
                                         "inpaint_colored_bubbles", False
                                     ),
-                                    label="Use Flux to Inpaint Colored Bubbles",
+                                    label="Inpaint Colored Bubbles",
                                     info=(
-                                        "Use Flux for bubble cleaning when the interior is not pure white/black "
-                                        "(e.g., colored/grayscale)."
+                                        "Use the selected inpainting model when the bubble interior "
+                                        "is not pure white/black (e.g., colored/grayscale)."
                                     ),
-                                    visible=_backend_visible,
-                                    interactive=saved_settings.get(
-                                        "outside_text_inpainting_method",
-                                        "flux_klein_4b",
-                                    )
-                                    not in ("opencv", "none"),
+                                    visible=_is_model_for_group,
+                                    interactive=_is_model_for_group,
                                 )
 
                                 gr.Markdown("### Font Rendering")
@@ -2281,6 +2314,16 @@ def create_layout(
                                     or saved_settings.get("upscaling_only", False)
                                 ),
                             )
+                            outside_text_lama_dump_masks = gr.Checkbox(
+                                value=saved_settings.get(
+                                    "outside_text_lama_dump_masks", False
+                                ),
+                                label="Dump LaMa Stroke Masks",
+                                info=(
+                                    "Write DBNet raw / stroke / overlay PNGs under the output "
+                                    "directory in lama_mask_debug/. Used to inspect OSB inpaint holes."
+                                ),
+                            )
                         setting_groups.append(group_other)
 
         # --- Define Event Handlers ---
@@ -2305,6 +2348,7 @@ def create_layout(
             xai_api_key,
             meta_api_key,
             deepseek_api_key,
+            deepl_api_key,
             zai_api_key,
             moonshot_api_key,
             mimo_api_key,
@@ -2335,6 +2379,7 @@ def create_layout(
             cleaning_only_toggle,
             upscaling_only_toggle,
             test_mode_toggle,
+            outside_text_lama_dump_masks,
             input_language,
             output_language,
             font_dropdown,
@@ -2381,6 +2426,7 @@ def create_layout(
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_lama_inpainting_size,
             outside_text_osb_confidence,
             outside_text_osb_text_free_only,
             outside_text_min_area_ignore_ratio_percent,
@@ -2441,6 +2487,7 @@ def create_layout(
             xai_api_key,
             meta_api_key,
             deepseek_api_key,
+            deepl_api_key,
             zai_api_key,
             moonshot_api_key,
             mimo_api_key,
@@ -2471,6 +2518,7 @@ def create_layout(
             cleaning_only_toggle,
             upscaling_only_toggle,
             test_mode_toggle,
+            outside_text_lama_dump_masks,
             input_language,
             output_language,
             font_dropdown,
@@ -2518,6 +2566,7 @@ def create_layout(
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_lama_inpainting_size,
             outside_text_osb_confidence,
             outside_text_osb_text_free_only,
             outside_text_min_area_ignore_ratio_percent,
@@ -2578,6 +2627,7 @@ def create_layout(
             xai_api_key,
             meta_api_key,
             deepseek_api_key,
+            deepl_api_key,
             zai_api_key,
             moonshot_api_key,
             mimo_api_key,
@@ -2612,6 +2662,7 @@ def create_layout(
             cleaning_only_toggle,
             upscaling_only_toggle,
             test_mode_toggle,
+            outside_text_lama_dump_masks,
             enable_web_search_checkbox,
             enable_code_execution_checkbox,
             image_detail_dropdown,
@@ -2650,6 +2701,7 @@ def create_layout(
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_lama_inpainting_size,
             outside_text_osb_confidence,
             outside_text_osb_text_free_only,
             outside_text_min_area_ignore_ratio_percent,
@@ -2716,6 +2768,7 @@ def create_layout(
             xai_api_key,
             meta_api_key,
             deepseek_api_key,
+            deepl_api_key,
             zai_api_key,
             moonshot_api_key,
             mimo_api_key,
@@ -2750,6 +2803,7 @@ def create_layout(
             cleaning_only_toggle,
             upscaling_only_toggle,
             test_mode_toggle,
+            outside_text_lama_dump_masks,
             enable_web_search_checkbox,
             enable_code_execution_checkbox,
             image_detail_dropdown,
@@ -2788,6 +2842,7 @@ def create_layout(
             outside_text_flux_upscale_small_crops,
             outside_text_flux_group_regions,
             outside_text_flux_residual_diff_threshold,
+            outside_text_lama_inpainting_size,
             outside_text_osb_confidence,
             outside_text_osb_text_free_only,
             outside_text_min_area_ignore_ratio_percent,
@@ -2908,6 +2963,7 @@ def create_layout(
                 ocr_method_radio,
                 use_custom_sampling_checkbox,
                 opencode_tier,
+                config_translation_mode,
             ],
             outputs=[
                 google_api_key,
@@ -2916,6 +2972,7 @@ def create_layout(
                 xai_api_key,
                 meta_api_key,
                 deepseek_api_key,
+                deepl_api_key,
                 zai_api_key,
                 moonshot_api_key,
                 mimo_api_key,
@@ -2940,6 +2997,8 @@ def create_layout(
                 reasoning_effort_dropdown,
                 effort_dropdown,
                 verbosity_dropdown,
+                config_translation_mode,
+                ocr_method_radio,
             ],
             queue=False,
         ).then(  # Trigger model fetch *after* provider change updates visibility etc.
@@ -3189,11 +3248,11 @@ def create_layout(
             group_regions: bool,
         ):
             """Update controls based on inpainting method selection."""
-            is_opencv = method == "opencv"
-            is_none = method == "none"
-            is_no_flux = is_opencv or is_none
+            is_lama = method == "lama_large"
             is_kontext = method == "flux_kontext"
             is_klein = method in ("flux_klein_9b", "flux_klein_4b")
+            is_flux = is_klein or is_kontext
+            is_model = is_flux or is_lama
 
             if is_kontext:
                 max_steps = 30
@@ -3202,15 +3261,15 @@ def create_layout(
                 max_steps = 12
                 default_steps = 4
 
-            if is_klein or is_kontext:
+            if is_flux:
                 backend_value = flux_valid_backend(method, current_backend)
                 backend_visible = True
             else:
                 backend_value = flux_valid_backend(method, current_backend)
                 backend_visible = False
 
-            show_low_vram = (is_klein or is_kontext) and backend_value == "sdnq"
-            show_sdcpp_cache = (is_klein or is_kontext) and backend_value == "sdcpp"
+            show_low_vram = is_flux and backend_value == "sdnq"
+            show_sdcpp_cache = is_flux and backend_value == "sdcpp"
             available_text_encoder_quants = flux_sdcpp_text_encoder_quants(method)
             text_encoder_quants = (
                 available_text_encoder_quants
@@ -3258,25 +3317,29 @@ def create_layout(
                 ),
                 text_encoder_quant_value,
                 gr.update(
-                    visible=(not is_no_flux),
-                    interactive=(not is_no_flux),
+                    visible=is_flux,
+                    interactive=is_flux,
                     maximum=max_steps,
                     value=default_steps,
                 ),
                 luminance_update,
-                gr.update(visible=(not is_no_flux), interactive=is_klein),
-                gr.update(visible=(not is_no_flux), interactive=(not is_no_flux)),
+                gr.update(visible=is_flux, interactive=is_klein),
+                gr.update(visible=is_model, interactive=is_model),
                 gr.update(
                     visible=residual_interactive,
                     interactive=residual_interactive,
                 ),
                 gr.update(
-                    visible=(not is_no_flux),
-                    interactive=(not is_no_flux),
+                    visible=is_flux,
+                    interactive=is_flux,
                 ),
                 gr.update(
-                    visible=(not is_no_flux),
-                    interactive=(not is_no_flux),
+                    visible=is_model,
+                    interactive=is_model,
+                ),
+                gr.update(
+                    visible=is_lama,
+                    interactive=is_lama,
                 ),
             )
 
@@ -3307,6 +3370,7 @@ def create_layout(
                 outside_text_flux_residual_diff_threshold,
                 outside_text_seed,
                 inpaint_colored_bubbles,
+                outside_text_lama_inpainting_size,
             ],
             queue=False,
         )
@@ -3470,8 +3534,8 @@ def create_layout(
         # Translation mode change handler - disable OCR selection when one-step
         config_translation_mode.change(
             fn=callbacks.handle_translation_mode_change,
-            inputs=[config_translation_mode, ocr_method_radio],
-            outputs=ocr_method_radio,
+            inputs=[config_translation_mode, ocr_method_radio, provider_selector],
+            outputs=[config_translation_mode, ocr_method_radio],
             queue=False,
         )
 
