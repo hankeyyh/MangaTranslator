@@ -72,6 +72,7 @@ GATEWAY_PIP_PACKAGES = [
 
 # Keep Gradio / FLUX / SAM out of the production image.
 WORKER_PIP_PACKAGES = GATEWAY_PIP_PACKAGES + [
+    "boto3>=1.35.0",
     "deepl>=1.19.0",
     "fonttools>=4.56.0",
     "huggingface_hub>=0.26.0",

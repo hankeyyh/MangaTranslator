@@ -1,6 +1,6 @@
 """GPU worker: download → translate_and_render → persist → append events.
 
-Persist (compress + supabase/volume) runs on a side thread so the next page can
+Persist (compress + supabase/r2/volume) runs on a side thread so the next page can
 translate while the previous page uploads. image_completed still fires after
 the object is readable. Upload time remains on this GPU function's wall clock.
 """
@@ -21,7 +21,7 @@ from PIL import Image
 
 from deploy.api.config_map import build_mt_config
 from deploy.api.jobs import JobStore
-from deploy.api.storage import upload_supabase_object
+from deploy.api.storage import upload_r2_object, upload_supabase_object
 from deploy.modal_config import (
     FONTS_VOLUME_PATH,
     MODEL_MOUNT_PATH,
@@ -136,7 +136,7 @@ def _output_type(request: dict[str, Any]) -> str:
 
 
 def _persist_output(request: dict[str, Any]) -> bool:
-    """volume / supabase 才落最终图；none 只跑翻译，不写盘、不上传。"""
+    """volume / supabase / r2 才落最终图；none 只跑翻译，不写盘、不上传。"""
     return _output_type(request) != "none"
 
 
@@ -173,6 +173,13 @@ def _write_output(
         bucket = output.get("bucket") or "translation_storage"
         _compress_for_upload(local_path)
         return upload_supabase_object(bucket, object_path, local_path)
+
+    if output_type == "r2":
+        bucket = output.get("bucket")
+        if not bucket:
+            raise ValueError("output.bucket is required when output.type is r2")
+        _compress_for_upload(local_path)
+        return upload_r2_object(bucket, object_path, local_path)
 
     if output_type == "volume":
         dest = Path(SCRATCH_MOUNT_PATH) / "results" / object_path

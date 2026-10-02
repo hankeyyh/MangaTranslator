@@ -59,10 +59,13 @@ DEEPSEEK_API_KEY=
 DEEPSEEK_API_BASE=https://api.deepseek.com
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
+R2_ENDPOINT=
+R2_ACCESS_KEY_ID=
+R2_SECRET_ACCESS_KEY=
 HF_TOKEN=
 EOF
         print_success "Wrote ${PROD_ENV_FILE} with a new MT_API_KEY"
-        print_warning "Fill DEEPL_AUTH_KEY, DEEPSEEK_API_KEY, SUPABASE_* and HF_TOKEN in ${PROD_ENV_FILE}"
+        print_warning "Fill DEEPL_AUTH_KEY, DEEPSEEK_API_KEY, storage credentials (R2_* or SUPABASE_*) and HF_TOKEN in ${PROD_ENV_FILE}"
     fi
 
     if ! grep -q "^MT_API_KEY=" "$PROD_ENV_FILE"; then

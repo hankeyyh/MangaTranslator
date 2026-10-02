@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from deploy.modal_config import DEFAULT_FONT_NAME, MAX_IMAGES_PER_JOB, PROVIDER_ALIASES
 
-OutputType = Literal["supabase", "volume", "none"]
+OutputType = Literal["supabase", "r2", "volume", "none"]
 JobStatus = Literal["queued", "running", "completed", "failed"]
 
 
@@ -111,7 +111,7 @@ class ImageItemIn(BaseModel):
 
 
 class OutputSpecIn(BaseModel):
-    # none: 跑完翻译不写最终图、不上传。volume / supabase 才落盘。
+    # none: 跑完翻译不写最终图、不上传。volume / supabase / r2 才落盘。
     type: OutputType = "none"
     bucket: str | None = None
     paths: list[str] = Field(default_factory=list)
@@ -138,9 +138,11 @@ class CreateJobRequest(BaseModel):
         if len(set(indexes)) != len(indexes):
             raise ValueError("image index must be unique within a job")
 
-        if self.output.type == "supabase":
+        if self.output.type in {"supabase", "r2"}:
             if not self.output.bucket:
-                raise ValueError("output.bucket is required when output.type is supabase")
+                raise ValueError(
+                    f"output.bucket is required when output.type is {self.output.type}"
+                )
             if self.output.paths and len(self.output.paths) != len(self.images):
                 raise ValueError("output.paths length must match images")
         return self
